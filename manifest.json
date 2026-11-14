@@ -1,14 +1,14 @@
 {
-  "name": "ניהול מספרה - אדמין",
-  "short_name": "אדמין מספרה",
+  "name": "קביעת תור למספרה",
+  "short_name": "תור למספרה",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#09090b",
-  "theme_color": "#10b981",
+  "theme_color": "#d97706",
   "orientation": "portrait",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3135/3135715.png",
+      "src": "https://cdn-icons-png.flaticon.com/512/1057/1057369.png",
       "sizes": "512x512",
       "type": "image/png"
     }
