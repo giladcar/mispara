@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, collection, addDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import AnnouncementBanner from './AnnouncementBanner';
 
 interface LobbyProps {
   userEmail: string;
@@ -397,6 +398,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
+	<AnnouncementBanner />
       {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center justify-between">
