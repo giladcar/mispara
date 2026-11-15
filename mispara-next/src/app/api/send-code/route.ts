@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../../../lib/firebase';
-
-export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
