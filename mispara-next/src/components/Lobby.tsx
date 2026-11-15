@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { doc, collection, addDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, addDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 interface LobbyProps {
@@ -56,6 +56,45 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     setTimeout(() => setToast(''), 3200);
   };
 
+  // טעינת פרטי הלקוח השמורים מהפעם האחרונה (מהענן ומהמכשיר)
+  useEffect(() => {
+    const loadSavedProfile = async () => {
+      // 1. טעינה מיידית מהזיכרון המקומי במכשיר
+      const localProfile = localStorage.getItem(`barber_profile_${userEmail}`);
+      if (localProfile) {
+        try {
+          const parsed = JSON.parse(localProfile);
+          if (parsed.firstName) setFirstName(parsed.firstName);
+          if (parsed.lastName) setLastName(parsed.lastName);
+          if (parsed.phone) setPhone(parsed.phone);
+        } catch {}
+      }
+
+      // 2. סנכרון מהענן (עובד גם אם הלקוח נכנס ממכשיר חדש)
+      try {
+        const profileSnap = await getDoc(doc(db, 'barber_users', userEmail));
+        if (profileSnap.exists()) {
+          const data = profileSnap.data();
+          if (data.firstName) setFirstName(data.firstName);
+          if (data.lastName) setLastName(data.lastName);
+          if (data.phone) setPhone(data.phone);
+          localStorage.setItem(
+            `barber_profile_${userEmail}`,
+            JSON.stringify({
+              firstName: data.firstName || '',
+              lastName: data.lastName || '',
+              phone: data.phone || '',
+            })
+          );
+        }
+      } catch (err) {
+        console.error('Error loading user profile:', err);
+      }
+    };
+
+    loadSavedProfile();
+  }, [userEmail]);
+
   useEffect(() => {
     const unsubSettings = onSnapshot(doc(db, 'config', 'settings'), (snap) => {
       if (snap.exists()) {
@@ -103,7 +142,12 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const handleBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pendingSlot) return;
-    if (!firstName.trim() || !lastName.trim() || phone.replace(/\D/g, '').length < 9) {
+
+    const cleanFirst = firstName.trim();
+    const cleanLast = lastName.trim();
+    const cleanPhone = phone.trim();
+
+    if (!cleanFirst || !cleanLast || cleanPhone.replace(/\D/g, '').length < 9) {
       showToast('נא למלא שם פרטי, שם משפחה וטלפון תקין');
       return;
     }
@@ -116,17 +160,29 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
     setSubmitting(true);
     try {
+      // שמירת התור
       await addDoc(collection(db, 'appointments'), {
         userEmail,
         date: selectedDateStr,
         time: pendingSlot,
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        phone: phone.trim(),
+        firstName: cleanFirst,
+        lastName: cleanLast,
+        phone: cleanPhone,
         createdAt: Date.now(),
       });
+
+      // שמירת פרטי הלקוח לפעם הבאה (בענן + מקומית)
+      const profileData = {
+        firstName: cleanFirst,
+        lastName: cleanLast,
+        phone: cleanPhone,
+        updatedAt: Date.now(),
+      };
+      await setDoc(doc(db, 'barber_users', userEmail), profileData, { merge: true });
+      localStorage.setItem(`barber_profile_${userEmail}`, JSON.stringify(profileData));
+
       setPendingSlot(null);
-      showToast('התור נקבע בהצלחה ונשמר בחשבונך! ✂');
+      showToast('התור נקבע והפרטים נשמרו לפעם הבאה! ✂');
     } catch {
       showToast('שגיאה בשמירת התור');
     } finally {
@@ -169,7 +225,9 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
             <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg">✂</div>
             <div>
               <h1 className="text-base sm:text-lg font-black text-white leading-tight">המספרה</h1>
-              <p className="text-[11px] text-zinc-400 truncate max-w-[160px] sm:max-w-xs" dir="ltr">{userEmail}</p>
+              <p className="text-[11px] text-zinc-400 truncate max-w-[160px] sm:max-w-xs" dir="ltr">
+                {firstName ? `${firstName} ${lastName}` : userEmail}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
