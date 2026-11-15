@@ -9,6 +9,15 @@ interface LobbyProps {
   onLogout: () => void;
 }
 
+interface DayRule {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+  interval: number;
+  bufferMinutes: number;
+  maxAppointmentsPerDay: number;
+}
+
 interface Appointment {
   id: string;
   userEmail: string;
@@ -27,6 +36,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     interval: 45,
     bufferMinutes: 0,
     maxAppointmentsPerDay: 0,
+    weeklyRules: null as Record<number, DayRule> | null,
     blockedDates: [] as string[],
     blockedSlots: [] as string[],
   });
@@ -43,6 +53,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   const [selectedDateStr, setSelectedDateStr] = useState(() => formatDate(new Date()));
   const [pendingSlot, setPendingSlot] = useState<string | null>(null);
+  const [lastBookedCalUrl, setLastBookedCalUrl] = useState<string | null>(null);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
@@ -112,14 +123,32 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     };
   }, []);
 
-  const generateTimeSlots = () => {
-    const [startH, startM] = settings.startTime.split(':').map(Number);
-    const [endH, endM] = settings.endTime.split(':').map(Number);
+  const getDayRule = (dayIndex: number): DayRule => {
+    if (settings.weeklyRules && settings.weeklyRules[dayIndex]) {
+      return settings.weeklyRules[dayIndex];
+    }
+    return {
+      enabled: settings.activeDays.includes(dayIndex),
+      startTime: settings.startTime || '15:00',
+      endTime: settings.endTime || '20:00',
+      interval: Number(settings.interval) || 45,
+      bufferMinutes: Number(settings.bufferMinutes) || 0,
+      maxAppointmentsPerDay: Number(settings.maxAppointmentsPerDay) || 0,
+    };
+  };
+
+  const generateTimeSlotsForDate = (dateStr: string) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const rule = getDayRule(d.getDay());
+    if (!rule.enabled) return [];
+
+    const [startH, startM] = rule.startTime.split(':').map(Number);
+    const [endH, endM] = rule.endTime.split(':').map(Number);
     let current = startH * 60 + startM;
     const end = endH * 60 + endM;
-    const duration = Number(settings.interval) || 45;
-    const buffer = Number(settings.bufferMinutes) || 0;
-    const maxPerDay = Number(settings.maxAppointmentsPerDay) || 0;
+    const duration = Number(rule.interval) || 45;
+    const buffer = Number(rule.bufferMinutes) || 0;
+    const maxPerDay = Number(rule.maxAppointmentsPerDay) || 0;
 
     const slots: string[] = [];
     while (current + duration <= end) {
@@ -137,9 +166,28 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (d < today) return false;
-    if (!settings.activeDays.includes(d.getDay())) return false;
+    const rule = getDayRule(d.getDay());
+    if (!rule.enabled) return false;
     if (settings.blockedDates && settings.blockedDates.includes(dateStr)) return false;
     return true;
+  };
+
+  const buildGoogleCalendarUrl = (dateStr: string, timeStr: string, fName: string, lName: string) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const rule = getDayRule(d.getDay());
+    const duration = Number(rule.interval) || 45;
+
+    const [h, m] = timeStr.split(':').map(Number);
+    const startTotal = h * 60 + m;
+    const endTotal = startTotal + duration;
+
+    const dateClean = dateStr.replace(/-/g, '');
+    const startFmt = `${dateClean}T${String(Math.floor(startTotal / 60)).padStart(2, '0')}${String(startTotal % 60).padStart(2, '0')}00`;
+    const endFmt = `${dateClean}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}${String(endTotal % 60).padStart(2, '0')}00`;
+
+    const title = encodeURIComponent(`תספורת - ${fName} ${lName}`);
+    const details = encodeURIComponent(`תור למספרה עבור ${fName} ${lName}`);
+    return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startFmt}/${endFmt}&details=${details}`;
   };
 
   const handleBookSubmit = async (e: React.FormEvent) => {
@@ -182,8 +230,10 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       await setDoc(doc(db, 'barber_users', userEmail), profileData, { merge: true });
       localStorage.setItem(`barber_profile_${userEmail}`, JSON.stringify(profileData));
 
+      const calUrl = buildGoogleCalendarUrl(selectedDateStr, pendingSlot, cleanFirst, cleanLast);
       setPendingSlot(null);
-      showToast('התור נקבע והפרטים נשמרו לפעם הבאה! ✂');
+      setLastBookedCalUrl(calUrl);
+      showToast('התור נקבע בהצלחה! ✂');
     } catch {
       showToast('שגיאה בשמירת התור');
     } finally {
@@ -202,6 +252,17 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     }
   };
 
+  const handleConfirmLogout = () => {
+    if (!confirm('האם אתה בטוח שברצונך להתנתק מהחשבון?')) return;
+    onLogout();
+  };
+
+  const handleGoToday = () => {
+    const today = new Date();
+    setSelectedDateStr(formatDate(today));
+    setCurrentMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+  };
+
   const myAppointments = appointments
     .filter((a) => a.userEmail === userEmail)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
@@ -210,15 +271,16 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const month = currentMonth.getMonth();
   const firstDayIndex = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const allSlots = generateTimeSlots();
 
   const now = new Date();
   const todayStr = formatDate(now);
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const selectedDateObj = new Date(selectedDateStr + 'T00:00:00');
+  const selectedDaySlots = generateTimeSlotsForDate(selectedDateStr);
 
   const countAvailableForDate = (dateStr: string) => {
-    return allSlots.filter((time) => {
+    const slots = generateTimeSlotsForDate(dateStr);
+    return slots.filter((time) => {
       const [h, m] = time.split(':').map(Number);
       const isPast = dateStr === todayStr && h * 60 + m <= currentMinutes;
       const isBooked = appointments.some((a) => a.date === dateStr && a.time === time);
@@ -250,7 +312,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">{myAppointments.length}</span>
             </button>
             <button
-              onClick={onLogout}
+              onClick={handleConfirmLogout}
               className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-3 py-2 rounded-xl"
             >
               יציאה
@@ -265,7 +327,13 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         <section className="md:col-span-7 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold text-white">{monthsHe[month]} {year}</h2>
-            <div className="flex gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleGoToday}
+                className="px-3 h-9 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 text-xs font-bold"
+              >
+                היום
+              </button>
               <button
                 onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}
                 className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
@@ -328,11 +396,11 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
             </h3>
           </div>
 
-          {!isDayOpen(selectedDateStr) ? (
+          {!isDayOpen(selectedDateStr) || selectedDaySlots.length === 0 ? (
             <div className="text-center py-10 text-zinc-500 text-sm">המספרה סגורה בתאריך זה</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              {allSlots.map((time) => {
+              {selectedDaySlots.map((time) => {
                 const [h, m] = time.split(':').map(Number);
                 const isPast = selectedDateStr === todayStr && h * 60 + m <= currentMinutes;
                 const isBooked = appointments.some((a) => a.date === selectedDateStr && a.time === time);
@@ -342,7 +410,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                   return (
                     <div
                       key={time}
-                      title={isPast ? 'השעה כבר עברה' : 'תפוס'}
                       className="py-3 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-600 text-center text-sm line-through"
                     >
                       {time}
@@ -429,6 +496,32 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         </div>
       )}
 
+      {/* Booking Success + Add to Calendar Modal */}
+      {lastBookedCalUrl && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-emerald-500/40 rounded-2xl max-w-sm w-full p-6 text-center shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-2xl mx-auto">✓</div>
+            <h3 className="text-xl font-black text-white">התור נקבע בהצלחה!</h3>
+            <p className="text-xs text-zinc-400">רוצה לקבל תזכורת אוטומטית לטלפון? הוסף את התור ליומן Google שלך:</p>
+            <a
+              href={lastBookedCalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setLastBookedCalUrl(null)}
+              className="block w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
+            >
+              הוסף ליומן Google 📅
+            </a>
+            <button
+              onClick={() => setLastBookedCalUrl(null)}
+              className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold py-2.5 rounded-xl text-xs"
+            >
+              סגור
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar My Appointments */}
       {sidebarOpen && (
         <>
@@ -452,21 +545,34 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               ) : (
                 myAppointments.map((app) => {
                   const d = new Date(app.date + 'T00:00:00');
+                  const calUrl = buildGoogleCalendarUrl(app.date, app.time, app.firstName, app.lastName);
                   return (
-                    <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-bold text-amber-400">
-                          יום {daysHe[d.getDay()]}, {d.getDate()}/{d.getMonth() + 1} | {app.time}
-                        </p>
-                        <p className="text-xs text-zinc-300 mt-1">{app.firstName} {app.lastName}</p>
-                        <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
+                    <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-amber-400">
+                            יום {daysHe[d.getDay()]}, {d.getDate()}/{d.getMonth() + 1} | {app.time}
+                          </p>
+                          <p className="text-xs text-zinc-300 mt-1">{app.firstName} {app.lastName}</p>
+                          <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => handleCancelAppointment(app)}
-                        className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-2 rounded-lg transition"
-                      >
-                        ביטול תור
-                      </button>
+                      <div className="flex items-center gap-2 pt-2 border-t border-zinc-900">
+                        <a
+                          href={calUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 text-center bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-amber-500/30 text-xs font-bold py-2 rounded-lg transition"
+                        >
+                          הוסף ליומן 📅
+                        </a>
+                        <button
+                          onClick={() => handleCancelAppointment(app)}
+                          className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-2 rounded-lg transition"
+                        >
+                          ביטול תור
+                        </button>
+                      </div>
                     </div>
                   );
                 })
