@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, collection, addDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import AnnouncementBanner from './AnnouncementBanner';
+import ImLateButton from './ImLateButton';
 
 interface LobbyProps {
   userEmail: string;
@@ -697,7 +698,16 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           </div>
         </div>
       )}
-
+<p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
+                      </div>
+                      <ImLateButton
+                        date={app.date}
+                        time={app.time}
+                        firstName={app.firstName}
+                      />
+                      <div className="flex items-center gap-2 pt-2 border-t border-zinc-900">
+                        <a
+                          href={calUrl}
       {/* Sidebar My Appointments */}
       {sidebarOpen && (
         <>
