@@ -25,6 +25,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     startTime: '15:00',
     endTime: '20:00',
     interval: 45,
+    bufferMinutes: 0,
+    maxAppointmentsPerDay: 0,
     blockedDates: [] as string[],
     blockedSlots: [] as string[],
   });
@@ -56,10 +58,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     setTimeout(() => setToast(''), 3200);
   };
 
-  // טעינת פרטי הלקוח השמורים מהפעם האחרונה (מהענן ומהמכשיר)
   useEffect(() => {
     const loadSavedProfile = async () => {
-      // 1. טעינה מיידית מהזיכרון המקומי במכשיר
       const localProfile = localStorage.getItem(`barber_profile_${userEmail}`);
       if (localProfile) {
         try {
@@ -70,7 +70,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         } catch {}
       }
 
-      // 2. סנכרון מהענן (עובד גם אם הלקוח נכנס ממכשיר חדש)
       try {
         const profileSnap = await getDoc(doc(db, 'barber_users', userEmail));
         if (profileSnap.exists()) {
@@ -118,13 +117,17 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     const [endH, endM] = settings.endTime.split(':').map(Number);
     let current = startH * 60 + startM;
     const end = endH * 60 + endM;
-    const step = Number(settings.interval) || 45;
+    const duration = Number(settings.interval) || 45;
+    const buffer = Number(settings.bufferMinutes) || 0;
+    const maxPerDay = Number(settings.maxAppointmentsPerDay) || 0;
+
     const slots: string[] = [];
-    while (current + step <= end) {
+    while (current + duration <= end) {
+      if (maxPerDay > 0 && slots.length >= maxPerDay) break;
       const h = String(Math.floor(current / 60)).padStart(2, '0');
       const m = String(current % 60).padStart(2, '0');
       slots.push(`${h}:${m}`);
-      current += step;
+      current += duration + buffer;
     }
     return slots;
   };
@@ -160,7 +163,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
     setSubmitting(true);
     try {
-      // שמירת התור
       await addDoc(collection(db, 'appointments'), {
         userEmail,
         date: selectedDateStr,
@@ -171,7 +173,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         createdAt: Date.now(),
       });
 
-      // שמירת פרטי הלקוח לפעם הבאה (בענן + מקומית)
       const profileData = {
         firstName: cleanFirst,
         lastName: cleanLast,
@@ -215,6 +216,16 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const todayStr = formatDate(now);
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const selectedDateObj = new Date(selectedDateStr + 'T00:00:00');
+
+  const countAvailableForDate = (dateStr: string) => {
+    return allSlots.filter((time) => {
+      const [h, m] = time.split(':').map(Number);
+      const isPast = dateStr === todayStr && h * 60 + m <= currentMinutes;
+      const isBooked = appointments.some((a) => a.date === dateStr && a.time === time);
+      const isBlocked = (settings.blockedSlots || []).includes(`${dateStr}_${time}`);
+      return !isPast && !isBooked && !isBlocked;
+    }).length;
+  };
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
@@ -281,9 +292,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               const dateStr = formatDate(new Date(year, month, day));
               const open = isDayOpen(dateStr);
               const isSelected = dateStr === selectedDateStr;
-              const takenCount = appointments.filter((a) => a.date === dateStr).length;
-              const blockedCount = (settings.blockedSlots || []).filter((s) => s.startsWith(dateStr + '_')).length;
-              const availableCount = Math.max(0, allSlots.length - takenCount - blockedCount);
+              const availableCount = open ? countAvailableForDate(dateStr) : 0;
 
               return (
                 <button
@@ -333,6 +342,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                   return (
                     <div
                       key={time}
+                      title={isPast ? 'השעה כבר עברה' : 'תפוס'}
                       className="py-3 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-600 text-center text-sm line-through"
                     >
                       {time}
