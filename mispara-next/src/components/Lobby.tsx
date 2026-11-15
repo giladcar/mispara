@@ -18,6 +18,13 @@ interface DayRule {
   maxAppointmentsPerDay: number;
 }
 
+interface BarberService {
+  id: string;
+  name: string;
+  price: number;
+  duration: number;
+}
+
 interface Appointment {
   id: string;
   userEmail: string;
@@ -26,21 +33,34 @@ interface Appointment {
   firstName: string;
   lastName: string;
   phone: string;
+  serviceId?: string;
+  serviceName?: string;
+  servicePrice?: number;
+  serviceDuration?: number;
 }
+
+const DEFAULT_SERVICES: BarberService[] = [
+  { id: 'srv_1', name: 'תספורת גבר', price: 60, duration: 30 },
+  { id: 'srv_2', name: 'תספורת + זקן', price: 80, duration: 45 },
+  { id: 'srv_3', name: 'תספורת ילד', price: 50, duration: 30 },
+];
 
 export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const [settings, setSettings] = useState({
     activeDays: [0, 1, 2, 3, 4, 5],
     startTime: '15:00',
     endTime: '20:00',
-    interval: 45,
+    interval: 30,
     bufferMinutes: 0,
     maxAppointmentsPerDay: 0,
+    maxActivePerUser: 2,
+    services: DEFAULT_SERVICES,
     weeklyRules: null as Record<number, DayRule> | null,
     blockedDates: [] as string[],
     blockedSlots: [] as string[],
   });
 
+  const [selectedServiceId, setSelectedServiceId] = useState<string>('srv_1');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => {
     const d = new Date();
@@ -66,7 +86,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(''), 3200);
+    setTimeout(() => setToast(''), 3600);
   };
 
   useEffect(() => {
@@ -108,7 +128,11 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   useEffect(() => {
     const unsubSettings = onSnapshot(doc(db, 'config', 'settings'), (snap) => {
       if (snap.exists()) {
-        setSettings((prev) => ({ ...prev, ...snap.data() }));
+        const data = snap.data();
+        setSettings((prev) => {
+          const mergedServices = data.services && data.services.length > 0 ? data.services : DEFAULT_SERVICES;
+          return { ...prev, ...data, services: mergedServices };
+        });
       }
     });
 
@@ -123,6 +147,20 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     };
   }, []);
 
+  const servicesList = settings.services && settings.services.length > 0 ? settings.services : DEFAULT_SERVICES;
+  const activeService = servicesList.find((s) => s.id === selectedServiceId) || servicesList[0];
+
+  const timeToMins = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+
+  const minsToTime = (mins: number) => {
+    const h = String(Math.floor(mins / 60)).padStart(2, '0');
+    const m = String(mins % 60).padStart(2, '0');
+    return `${h}:${m}`;
+  };
+
   const getDayRule = (dayIndex: number): DayRule => {
     if (settings.weeklyRules && settings.weeklyRules[dayIndex]) {
       return settings.weeklyRules[dayIndex];
@@ -131,34 +169,65 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       enabled: settings.activeDays.includes(dayIndex),
       startTime: settings.startTime || '15:00',
       endTime: settings.endTime || '20:00',
-      interval: Number(settings.interval) || 45,
+      interval: Number(settings.interval) || 30,
       bufferMinutes: Number(settings.bufferMinutes) || 0,
       maxAppointmentsPerDay: Number(settings.maxAppointmentsPerDay) || 0,
     };
   };
 
-  const generateTimeSlotsForDate = (dateStr: string) => {
+  const generateBaseSlotsForDate = (dateStr: string) => {
     const d = new Date(dateStr + 'T00:00:00');
     const rule = getDayRule(d.getDay());
     if (!rule.enabled) return [];
 
-    const [startH, startM] = rule.startTime.split(':').map(Number);
-    const [endH, endM] = rule.endTime.split(':').map(Number);
-    let current = startH * 60 + startM;
-    const end = endH * 60 + endM;
-    const duration = Number(rule.interval) || 45;
+    let current = timeToMins(rule.startTime);
+    const end = timeToMins(rule.endTime);
+    const step = Number(rule.interval) || 30;
     const buffer = Number(rule.bufferMinutes) || 0;
     const maxPerDay = Number(rule.maxAppointmentsPerDay) || 0;
 
     const slots: string[] = [];
-    while (current + duration <= end) {
+    while (current + step <= end) {
       if (maxPerDay > 0 && slots.length >= maxPerDay) break;
-      const h = String(Math.floor(current / 60)).padStart(2, '0');
-      const m = String(current % 60).padStart(2, '0');
-      slots.push(`${h}:${m}`);
-      current += duration + buffer;
+      slots.push(minsToTime(current));
+      current += step + buffer;
     }
     return slots;
+  };
+
+  // Checks if a service of `duration` starting at `timeStr` fits before closing time & doesn't overlap existing bookings or blocked slots
+  const isSlotAvailableForService = (dateStr: string, timeStr: string, serviceDuration: number) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const rule = getDayRule(d.getDay());
+    const closeMins = timeToMins(rule.endTime);
+    const startMins = timeToMins(timeStr);
+    const endMins = startMins + serviceDuration;
+
+    if (endMins > closeMins) return false;
+
+    // Check overlap with existing appointments
+    const hasAppOverlap = appointments.some((a) => {
+      if (a.date !== dateStr) return false;
+      const aStart = timeToMins(a.time);
+      const aDur = Number(a.serviceDuration) || Number(rule.interval) || 30;
+      const aEnd = aStart + aDur;
+      return startMins < aEnd && endMins > aStart;
+    });
+    if (hasAppOverlap) return false;
+
+    // Check overlap with admin-blocked slots
+    const step = Number(rule.interval) || 30;
+    const blockedForDate = (settings.blockedSlots || []).filter((s) => s.startsWith(dateStr + '_'));
+    const hasBlockedOverlap = blockedForDate.some((key) => {
+      const bTime = key.split('_')[1];
+      if (!bTime) return false;
+      const bStart = timeToMins(bTime);
+      const bEnd = bStart + step;
+      return startMins < bEnd && endMins > bStart;
+    });
+    if (hasBlockedOverlap) return false;
+
+    return true;
   };
 
   const isDayOpen = (dateStr: string) => {
@@ -172,27 +241,62 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     return true;
   };
 
-  const buildGoogleCalendarUrl = (dateStr: string, timeStr: string, fName: string, lName: string) => {
-    const d = new Date(dateStr + 'T00:00:00');
-    const rule = getDayRule(d.getDay());
-    const duration = Number(rule.interval) || 45;
+  const now = new Date();
+  const todayStr = formatDate(now);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-    const [h, m] = timeStr.split(':').map(Number);
-    const startTotal = h * 60 + m;
-    const endTotal = startTotal + duration;
+  const myAppointments = appointments
+    .filter((a) => a.userEmail === userEmail)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+
+  // Active future appointments for quota limit
+  const myActiveFutureAppointments = myAppointments.filter((a) => {
+    if (a.date > todayStr) return true;
+    if (a.date === todayStr && timeToMins(a.time) > currentMinutes) return true;
+    return false;
+  });
+
+  const maxActiveLimit = Number(settings.maxActivePerUser) || 0;
+  const reachedBookingQuota = maxActiveLimit > 0 && myActiveFutureAppointments.length >= maxActiveLimit;
+
+  const buildGoogleCalendarUrl = (
+    dateStr: string,
+    timeStr: string,
+    fName: string,
+    lName: string,
+    srvName: string,
+    durationMins: number
+  ) => {
+    const startTotal = timeToMins(timeStr);
+    const endTotal = startTotal + durationMins;
 
     const dateClean = dateStr.replace(/-/g, '');
     const startFmt = `${dateClean}T${String(Math.floor(startTotal / 60)).padStart(2, '0')}${String(startTotal % 60).padStart(2, '0')}00`;
     const endFmt = `${dateClean}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}${String(endTotal % 60).padStart(2, '0')}00`;
 
-    const title = encodeURIComponent(`תספורת - ${fName} ${lName}`);
-    const details = encodeURIComponent(`תור למספרה עבור ${fName} ${lName}`);
+    const title = encodeURIComponent(`${srvName} - ${fName} ${lName}`);
+    const details = encodeURIComponent(`תור למספרה: ${srvName} (${durationMins} דק') עבור ${fName} ${lName}`);
     return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startFmt}/${endFmt}&details=${details}`;
+  };
+
+  const handleSelectSlot = (time: string) => {
+    if (reachedBookingQuota) {
+      showToast(`הגעת למקסימום של ${maxActiveLimit} תורים פעילים במקביל. בטל תור קיים כדי לקבוע חדש.`);
+      setSidebarOpen(true);
+      return;
+    }
+    setPendingSlot(time);
   };
 
   const handleBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pendingSlot) return;
+
+    if (reachedBookingQuota) {
+      showToast(`ניתן להחזיק עד ${maxActiveLimit} תורים עתידיים במקביל`);
+      setPendingSlot(null);
+      return;
+    }
 
     const cleanFirst = firstName.trim();
     const cleanLast = lastName.trim();
@@ -203,8 +307,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       return;
     }
 
-    if (appointments.some((a) => a.date === selectedDateStr && a.time === pendingSlot)) {
-      showToast('אופס! מישהו בדיוק תפס את השעה הזו');
+    if (!isSlotAvailableForService(selectedDateStr, pendingSlot, activeService.duration)) {
+      showToast('אופס! השעה הזו כבר לא פנויה למשך הטיפול שנבחר');
       setPendingSlot(null);
       return;
     }
@@ -218,6 +322,10 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         firstName: cleanFirst,
         lastName: cleanLast,
         phone: cleanPhone,
+        serviceId: activeService.id,
+        serviceName: activeService.name,
+        servicePrice: activeService.price,
+        serviceDuration: activeService.duration,
         createdAt: Date.now(),
       });
 
@@ -230,7 +338,14 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       await setDoc(doc(db, 'barber_users', userEmail), profileData, { merge: true });
       localStorage.setItem(`barber_profile_${userEmail}`, JSON.stringify(profileData));
 
-      const calUrl = buildGoogleCalendarUrl(selectedDateStr, pendingSlot, cleanFirst, cleanLast);
+      const calUrl = buildGoogleCalendarUrl(
+        selectedDateStr,
+        pendingSlot,
+        cleanFirst,
+        cleanLast,
+        activeService.name,
+        activeService.duration
+      );
       setPendingSlot(null);
       setLastBookedCalUrl(calUrl);
       showToast('התור נקבע בהצלחה! ✂');
@@ -263,29 +378,20 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     setCurrentMonth(new Date(today.getFullYear(), today.getMonth(), 1));
   };
 
-  const myAppointments = appointments
-    .filter((a) => a.userEmail === userEmail)
-    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
   const firstDayIndex = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const now = new Date();
-  const todayStr = formatDate(now);
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const selectedDateObj = new Date(selectedDateStr + 'T00:00:00');
-  const selectedDaySlots = generateTimeSlotsForDate(selectedDateStr);
+  const selectedDaySlots = generateBaseSlotsForDate(selectedDateStr);
 
   const countAvailableForDate = (dateStr: string) => {
-    const slots = generateTimeSlotsForDate(dateStr);
+    const slots = generateBaseSlotsForDate(dateStr);
     return slots.filter((time) => {
-      const [h, m] = time.split(':').map(Number);
-      const isPast = dateStr === todayStr && h * 60 + m <= currentMinutes;
-      const isBooked = appointments.some((a) => a.date === dateStr && a.time === time);
-      const isBlocked = (settings.blockedSlots || []).includes(`${dateStr}_${time}`);
-      return !isPast && !isBooked && !isBlocked;
+      const isPast = dateStr === todayStr && timeToMins(time) <= currentMinutes;
+      if (isPast) return false;
+      return isSlotAvailableForService(dateStr, time, activeService.duration);
     }).length;
   };
 
@@ -309,7 +415,9 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
             >
               <span>התורים שלי</span>
-              <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">{myAppointments.length}</span>
+              <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">
+                {myActiveFutureAppointments.length}{maxActiveLimit > 0 ? `/${maxActiveLimit}` : ''}
+              </span>
             </button>
             <button
               onClick={handleConfirmLogout}
@@ -321,115 +429,176 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         </div>
       </header>
 
-      {/* Main Grid */}
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-6 grid grid-cols-1 md:grid-cols-12 gap-6">
-        {/* Calendar */}
-        <section className="md:col-span-7 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-white">{monthsHe[month]} {year}</h2>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={handleGoToday}
-                className="px-3 h-9 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 text-xs font-bold"
-              >
-                היום
-              </button>
-              <button
-                onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}
-                className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
-              >
-                ❯
-              </button>
-              <button
-                onClick={() => setCurrentMonth(new Date(year, month + 1, 1))}
-                className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
-              >
-                ❮
-              </button>
-            </div>
+      {/* Main Content */}
+      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-6 space-y-6">
+        
+        {/* Quota Warning Banner if limit reached */}
+        {reachedBookingQuota && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <span className="text-amber-300 font-medium">
+              הגעת למכסה של <b>{maxActiveLimit}</b> תורים פעילים במקביל. כדי לקבוע מועד אחר, בטל אחד מהתורים הקיימים שלך.
+            </span>
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="bg-amber-500 text-zinc-950 font-bold px-3 py-1.5 rounded-lg self-start sm:self-auto"
+            >
+              צפה בתורים שלי
+            </button>
           </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-zinc-400 mb-2">
-            <div>א'</div><div>ב'</div><div>ג'</div><div>ד'</div><div>ה'</div><div>ו'</div><div className="text-rose-400">ש'</div>
-          </div>
-          <div className="grid grid-cols-7 gap-1.5">
-            {Array.from({ length: firstDayIndex }).map((_, i) => (
-              <div key={`empty-${i}`} />
-            ))}
-            {Array.from({ length: daysInMonth }).map((_, idx) => {
-              const day = idx + 1;
-              const dateStr = formatDate(new Date(year, month, day));
-              const open = isDayOpen(dateStr);
-              const isSelected = dateStr === selectedDateStr;
-              const availableCount = open ? countAvailableForDate(dateStr) : 0;
+        )}
 
+        {/* Step 1: Service Selector */}
+        <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-xs font-black flex items-center justify-center">1</span>
+              בחר סוג שירות / טיפול
+            </h2>
+            <span className="text-[11px] text-zinc-400">השעות ביומן מתעדכנות אוטומטית לפי משך הטיפול</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {servicesList.map((srv) => {
+              const isSelected = srv.id === activeService.id;
               return (
                 <button
-                  key={dateStr}
-                  disabled={!open}
-                  onClick={() => setSelectedDateStr(dateStr)}
-                  className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
+                  key={srv.id}
+                  onClick={() => setSelectedServiceId(srv.id)}
+                  className={`p-3.5 rounded-xl border text-right transition flex items-center justify-between ${
                     isSelected
-                      ? 'bg-amber-500 text-zinc-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
-                      : open && availableCount > 0
-                      ? 'bg-zinc-950 border-zinc-800 hover:border-amber-500/60 text-white'
-                      : 'bg-zinc-950/30 border-transparent text-zinc-600 cursor-not-allowed'
+                      ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-500/10'
+                      : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-300'
                   }`}
                 >
-                  <span className="text-sm">{day}</span>
-                  {open && availableCount > 0 && (
-                    <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-zinc-900 font-bold' : 'text-emerald-400'}`}>
-                      {availableCount} פנויים
-                    </span>
-                  )}
+                  <div>
+                    <div className={`text-sm font-bold ${isSelected ? 'text-amber-400' : 'text-white'}`}>{srv.name}</div>
+                    <div className="text-[11px] text-zinc-400 mt-0.5">⏱ {srv.duration} דקות</div>
+                  </div>
+                  <div className={`text-sm font-black px-2.5 py-1 rounded-lg ${isSelected ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-900 text-amber-400'}`}>
+                    ₪{srv.price}
+                  </div>
                 </button>
               );
             })}
           </div>
         </section>
 
-        {/* Time Slots */}
-        <section className="md:col-span-5 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col">
-          <div className="mb-4 pb-3 border-b border-zinc-800">
-            <span className="text-xs text-amber-500 font-semibold">שעות פנויות לתאריך</span>
-            <h3 className="text-lg font-bold text-white mt-0.5">
-              יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()} ב{monthsHe[selectedDateObj.getMonth()]}
-            </h3>
-          </div>
-
-          {!isDayOpen(selectedDateStr) || selectedDaySlots.length === 0 ? (
-            <div className="text-center py-10 text-zinc-500 text-sm">המספרה סגורה בתאריך זה</div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              {selectedDaySlots.map((time) => {
-                const [h, m] = time.split(':').map(Number);
-                const isPast = selectedDateStr === todayStr && h * 60 + m <= currentMinutes;
-                const isBooked = appointments.some((a) => a.date === selectedDateStr && a.time === time);
-                const isBlocked = (settings.blockedSlots || []).includes(`${selectedDateStr}_${time}`);
-
-                if (isPast || isBooked || isBlocked) {
-                  return (
-                    <div
-                      key={time}
-                      className="py-3 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-600 text-center text-sm line-through"
-                    >
-                      {time}
-                    </div>
-                  );
-                }
+        {/* Step 2: Calendar & Time Slots */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+          {/* Calendar */}
+          <section className="md:col-span-7 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-xs font-black flex items-center justify-center">2</span>
+                {monthsHe[month]} {year}
+              </h2>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={handleGoToday}
+                  className="px-3 h-9 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 text-xs font-bold"
+                >
+                  היום
+                </button>
+                <button
+                  onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}
+                  className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+                >
+                  ❯
+                </button>
+                <button
+                  onClick={() => setCurrentMonth(new Date(year, month + 1, 1))}
+                  className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+                >
+                  ❮
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-zinc-400 mb-2">
+              <div>א'</div><div>ב'</div><div>ג'</div><div>ד'</div><div>ה'</div><div>ו'</div><div className="text-rose-400">ש'</div>
+            </div>
+            <div className="grid grid-cols-7 gap-1.5">
+              {Array.from({ length: firstDayIndex }).map((_, i) => (
+                <div key={`empty-${i}`} />
+              ))}
+              {Array.from({ length: daysInMonth }).map((_, idx) => {
+                const day = idx + 1;
+                const dateStr = formatDate(new Date(year, month, day));
+                const open = isDayOpen(dateStr);
+                const isSelected = dateStr === selectedDateStr;
+                const availableCount = open ? countAvailableForDate(dateStr) : 0;
 
                 return (
                   <button
-                    key={time}
-                    onClick={() => setPendingSlot(time)}
-                    className="py-3 rounded-xl bg-zinc-950 hover:bg-amber-500 hover:text-zinc-950 border border-zinc-700 hover:border-amber-400 text-white font-bold text-sm transition"
+                    key={dateStr}
+                    disabled={!open}
+                    onClick={() => setSelectedDateStr(dateStr)}
+                    className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
+                      isSelected
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
+                        : open && availableCount > 0
+                        ? 'bg-zinc-950 border-zinc-800 hover:border-amber-500/60 text-white'
+                        : 'bg-zinc-950/30 border-transparent text-zinc-600 cursor-not-allowed'
+                    }`}
                   >
-                    {time}
+                    <span className="text-sm">{day}</span>
+                    {open && availableCount > 0 && (
+                      <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-zinc-900 font-bold' : 'text-emerald-400'}`}>
+                        {availableCount} פנויים
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
-          )}
-        </section>
+          </section>
+
+          {/* Time Slots */}
+          <section className="md:col-span-5 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col">
+            <div className="mb-4 pb-3 border-b border-zinc-800">
+              <span className="text-xs text-amber-500 font-semibold">
+                שעות פנויות עבור {activeService.name} ({activeService.duration} דק')
+              </span>
+              <h3 className="text-lg font-bold text-white mt-0.5">
+                יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()} ב{monthsHe[selectedDateObj.getMonth()]}
+              </h3>
+            </div>
+
+            {!isDayOpen(selectedDateStr) || selectedDaySlots.length === 0 ? (
+              <div className="text-center py-10 text-zinc-500 text-sm">המספרה סגורה בתאריך זה</div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                {selectedDaySlots.map((time) => {
+                  const isPast = selectedDateStr === todayStr && timeToMins(time) <= currentMinutes;
+                  const available = !isPast && isSlotAvailableForService(selectedDateStr, time, activeService.duration);
+
+                  if (!available) {
+                    return (
+                      <div
+                        key={time}
+                        className="py-3 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-600 text-center text-sm line-through"
+                      >
+                        {time}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={time}
+                      onClick={() => handleSelectSlot(time)}
+                      className={`py-3 rounded-xl border font-bold text-sm transition ${
+                        reachedBookingQuota
+                          ? 'bg-zinc-950 border-zinc-800 text-zinc-500 cursor-not-allowed'
+                          : 'bg-zinc-950 hover:bg-amber-500 hover:text-zinc-950 border-zinc-700 hover:border-amber-400 text-white'
+                      }`}
+                    >
+                      {time}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
       </main>
 
       {/* Booking Modal */}
@@ -440,14 +609,19 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               <h3 className="text-xl font-bold text-white">קביעת תור</h3>
               <button onClick={() => setPendingSlot(null)} className="text-zinc-400 hover:text-white text-xl">✕</button>
             </div>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 mb-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-zinc-400">מועד נבחר</p>
-                <p className="text-sm font-bold text-amber-400 mt-0.5">
-                  יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()}/{selectedDateObj.getMonth() + 1} בשעה {pendingSlot}
-                </p>
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 mb-4 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-400">שירות נבחר:</span>
+                <span className="text-xs font-bold text-amber-400">
+                  {activeService.name} ({activeService.duration} דק') • ₪{activeService.price}
+                </span>
               </div>
-              <span className="text-2xl">✂</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-400">מועד:</span>
+                <span className="text-xs font-bold text-white">
+                  יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()}/{selectedDateObj.getMonth() + 1} בשעה {pendingSlot}
+                </span>
+              </div>
             </div>
             <form onSubmit={handleBookSubmit} className="space-y-3.5">
               <div>
@@ -545,17 +719,24 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               ) : (
                 myAppointments.map((app) => {
                   const d = new Date(app.date + 'T00:00:00');
-                  const calUrl = buildGoogleCalendarUrl(app.date, app.time, app.firstName, app.lastName);
+                  const srvName = app.serviceName || 'תספורת';
+                  const srvDur = app.serviceDuration || 30;
+                  const calUrl = buildGoogleCalendarUrl(app.date, app.time, app.firstName, app.lastName, srvName, srvDur);
                   return (
                     <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <div>
+                      <div>
+                        <div className="flex items-center justify-between">
                           <p className="text-sm font-bold text-amber-400">
                             יום {daysHe[d.getDay()]}, {d.getDate()}/{d.getMonth() + 1} | {app.time}
                           </p>
-                          <p className="text-xs text-zinc-300 mt-1">{app.firstName} {app.lastName}</p>
-                          <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
+                          {app.servicePrice && (
+                            <span className="text-xs font-bold text-emerald-400">₪{app.servicePrice}</span>
+                          )}
                         </div>
+                        <p className="text-xs font-medium text-zinc-200 mt-1">
+                          {srvName} ({srvDur} דק') — {app.firstName} {app.lastName}
+                        </p>
+                        <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
                       </div>
                       <div className="flex items-center gap-2 pt-2 border-t border-zinc-900">
                         <a
