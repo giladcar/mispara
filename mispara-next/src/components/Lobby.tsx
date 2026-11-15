@@ -1,0 +1,419 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { doc, collection, addDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+
+interface LobbyProps {
+  userEmail: string;
+  onLogout: () => void;
+}
+
+interface Appointment {
+  id: string;
+  userEmail: string;
+  date: string;
+  time: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+}
+
+export default function Lobby({ userEmail, onLogout }: LobbyProps) {
+  const [settings, setSettings] = useState({
+    activeDays: [0, 1, 2, 3, 4, 5],
+    startTime: '15:00',
+    endTime: '20:00',
+    interval: 45,
+    blockedDates: [] as string[],
+    blockedSlots: [] as string[],
+  });
+
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    return d;
+  });
+
+  const formatDate = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  const [selectedDateStr, setSelectedDateStr] = useState(() => formatDate(new Date()));
+  const [pendingSlot, setPendingSlot] = useState<string | null>(null);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [toast, setToast] = useState('');
+
+  const monthsHe = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+  const daysHe = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 3200);
+  };
+
+  useEffect(() => {
+    const unsubSettings = onSnapshot(doc(db, 'config', 'settings'), (snap) => {
+      if (snap.exists()) {
+        setSettings((prev) => ({ ...prev, ...snap.data() }));
+      }
+    });
+
+    const unsubApps = onSnapshot(collection(db, 'appointments'), (snapshot) => {
+      const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Appointment));
+      setAppointments(list);
+    });
+
+    return () => {
+      unsubSettings();
+      unsubApps();
+    };
+  }, []);
+
+  const generateTimeSlots = () => {
+    const [startH, startM] = settings.startTime.split(':').map(Number);
+    const [endH, endM] = settings.endTime.split(':').map(Number);
+    let current = startH * 60 + startM;
+    const end = endH * 60 + endM;
+    const step = Number(settings.interval) || 45;
+    const slots: string[] = [];
+    while (current + step <= end) {
+      const h = String(Math.floor(current / 60)).padStart(2, '0');
+      const m = String(current % 60).padStart(2, '0');
+      slots.push(`${h}:${m}`);
+      current += step;
+    }
+    return slots;
+  };
+
+  const isDayOpen = (dateStr: string) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (d < today) return false;
+    if (!settings.activeDays.includes(d.getDay())) return false;
+    if (settings.blockedDates && settings.blockedDates.includes(dateStr)) return false;
+    return true;
+  };
+
+  const handleBookSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingSlot) return;
+    if (!firstName.trim() || !lastName.trim() || phone.replace(/\D/g, '').length < 9) {
+      showToast('נא למלא שם פרטי, שם משפחה וטלפון תקין');
+      return;
+    }
+
+    if (appointments.some((a) => a.date === selectedDateStr && a.time === pendingSlot)) {
+      showToast('אופס! מישהו בדיוק תפס את השעה הזו');
+      setPendingSlot(null);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await addDoc(collection(db, 'appointments'), {
+        userEmail,
+        date: selectedDateStr,
+        time: pendingSlot,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        phone: phone.trim(),
+        createdAt: Date.now(),
+      });
+      setPendingSlot(null);
+      showToast('התור נקבע בהצלחה ונשמר בחשבונך! ✂');
+    } catch {
+      showToast('שגיאה בשמירת התור');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelAppointment = async (app: Appointment) => {
+    if (app.userEmail !== userEmail) return;
+    if (!confirm('בטוח שברצונך לבטל את התור?')) return;
+    try {
+      await deleteDoc(doc(db, 'appointments', app.id));
+      showToast('התור בוטל בהצלחה');
+    } catch {
+      showToast('שגיאה בביטול התור');
+    }
+  };
+
+  const myAppointments = appointments
+    .filter((a) => a.userEmail === userEmail)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const allSlots = generateTimeSlots();
+
+  const now = new Date();
+  const todayStr = formatDate(now);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const selectedDateObj = new Date(selectedDateStr + 'T00:00:00');
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
+      {/* Header */}
+      <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
+        <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg">✂</div>
+            <div>
+              <h1 className="text-base sm:text-lg font-black text-white leading-tight">המספרה</h1>
+              <p className="text-[11px] text-zinc-400 truncate max-w-[160px] sm:max-w-xs" dir="ltr">{userEmail}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
+            >
+              <span>התורים שלי</span>
+              <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">{myAppointments.length}</span>
+            </button>
+            <button
+              onClick={onLogout}
+              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-3 py-2 rounded-xl"
+            >
+              יציאה
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Grid */}
+      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-6 grid grid-cols-1 md:grid-cols-12 gap-6">
+        {/* Calendar */}
+        <section className="md:col-span-7 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-white">{monthsHe[month]} {year}</h2>
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}
+                className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+              >
+                ❯
+              </button>
+              <button
+                onClick={() => setCurrentMonth(new Date(year, month + 1, 1))}
+                className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+              >
+                ❮
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-zinc-400 mb-2">
+            <div>א'</div><div>ב'</div><div>ג'</div><div>ד'</div><div>ה'</div><div>ו'</div><div className="text-rose-400">ש'</div>
+          </div>
+          <div className="grid grid-cols-7 gap-1.5">
+            {Array.from({ length: firstDayIndex }).map((_, i) => (
+              <div key={`empty-${i}`} />
+            ))}
+            {Array.from({ length: daysInMonth }).map((_, idx) => {
+              const day = idx + 1;
+              const dateStr = formatDate(new Date(year, month, day));
+              const open = isDayOpen(dateStr);
+              const isSelected = dateStr === selectedDateStr;
+              const takenCount = appointments.filter((a) => a.date === dateStr).length;
+              const blockedCount = (settings.blockedSlots || []).filter((s) => s.startsWith(dateStr + '_')).length;
+              const availableCount = Math.max(0, allSlots.length - takenCount - blockedCount);
+
+              return (
+                <button
+                  key={dateStr}
+                  disabled={!open}
+                  onClick={() => setSelectedDateStr(dateStr)}
+                  className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
+                    isSelected
+                      ? 'bg-amber-500 text-zinc-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
+                      : open && availableCount > 0
+                      ? 'bg-zinc-950 border-zinc-800 hover:border-amber-500/60 text-white'
+                      : 'bg-zinc-950/30 border-transparent text-zinc-600 cursor-not-allowed'
+                  }`}
+                >
+                  <span className="text-sm">{day}</span>
+                  {open && availableCount > 0 && (
+                    <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-zinc-900 font-bold' : 'text-emerald-400'}`}>
+                      {availableCount} פנויים
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Time Slots */}
+        <section className="md:col-span-5 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col">
+          <div className="mb-4 pb-3 border-b border-zinc-800">
+            <span className="text-xs text-amber-500 font-semibold">שעות פנויות לתאריך</span>
+            <h3 className="text-lg font-bold text-white mt-0.5">
+              יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()} ב{monthsHe[selectedDateObj.getMonth()]}
+            </h3>
+          </div>
+
+          {!isDayOpen(selectedDateStr) ? (
+            <div className="text-center py-10 text-zinc-500 text-sm">המספרה סגורה בתאריך זה</div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              {allSlots.map((time) => {
+                const [h, m] = time.split(':').map(Number);
+                const isPast = selectedDateStr === todayStr && h * 60 + m <= currentMinutes;
+                const isBooked = appointments.some((a) => a.date === selectedDateStr && a.time === time);
+                const isBlocked = (settings.blockedSlots || []).includes(`${selectedDateStr}_${time}`);
+
+                if (isPast || isBooked || isBlocked) {
+                  return (
+                    <div
+                      key={time}
+                      className="py-3 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-600 text-center text-sm line-through"
+                    >
+                      {time}
+                    </div>
+                  );
+                }
+
+                return (
+                  <button
+                    key={time}
+                    onClick={() => setPendingSlot(time)}
+                    className="py-3 rounded-xl bg-zinc-950 hover:bg-amber-500 hover:text-zinc-950 border border-zinc-700 hover:border-amber-400 text-white font-bold text-sm transition"
+                  >
+                    {time}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </main>
+
+      {/* Booking Modal */}
+      {pendingSlot && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-white">קביעת תור</h3>
+              <button onClick={() => setPendingSlot(null)} className="text-zinc-400 hover:text-white text-xl">✕</button>
+            </div>
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3 mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-zinc-400">מועד נבחר</p>
+                <p className="text-sm font-bold text-amber-400 mt-0.5">
+                  יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()}/{selectedDateObj.getMonth() + 1} בשעה {pendingSlot}
+                </p>
+              </div>
+              <span className="text-2xl">✂</span>
+            </div>
+            <form onSubmit={handleBookSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">שם פרטי *</label>
+                <input
+                  type="text"
+                  required
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="לדוגמה: עומר"
+                  className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">שם משפחה *</label>
+                <input
+                  type="text"
+                  required
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="לדוגמה: כהן"
+                  className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">מספר טלפון *</label>
+                <input
+                  type="tel"
+                  required
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="050-0000000"
+                  className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-sm text-white outline-none text-left"
+                  dir="ltr"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
+              >
+                {submitting ? 'שומר תור...' : 'אישור וקביעת תור'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Sidebar My Appointments */}
+      {sidebarOpen && (
+        <>
+          <div onClick={() => setSidebarOpen(false)} className="fixed inset-0 bg-black/70 z-40" />
+          <aside className="fixed top-0 left-0 h-full w-full max-w-sm bg-zinc-900 border-r border-zinc-800 z-50 flex flex-col">
+            <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">התורים שלי</h3>
+                <p className="text-[11px] text-zinc-400" dir="ltr">{userEmail}</p>
+              </div>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="w-8 h-8 rounded-lg bg-zinc-800 text-zinc-300 flex items-center justify-center"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {myAppointments.length === 0 ? (
+                <p className="text-center text-zinc-500 text-sm py-8">אין לך תורים פעילים בחשבון זה</p>
+              ) : (
+                myAppointments.map((app) => {
+                  const d = new Date(app.date + 'T00:00:00');
+                  return (
+                    <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-bold text-amber-400">
+                          יום {daysHe[d.getDay()]}, {d.getDate()}/{d.getMonth() + 1} | {app.time}
+                        </p>
+                        <p className="text-xs text-zinc-300 mt-1">{app.firstName} {app.lastName}</p>
+                        <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
+                      </div>
+                      <button
+                        onClick={() => handleCancelAppointment(app)}
+                        className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-2 rounded-lg transition"
+                      >
+                        ביטול תור
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-5 right-5 left-5 sm:left-auto sm:w-80 bg-zinc-800 border border-amber-500/40 text-white px-4 py-3 rounded-xl shadow-2xl text-sm font-medium z-50 text-center">
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
