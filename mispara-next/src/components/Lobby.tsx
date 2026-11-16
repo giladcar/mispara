@@ -43,6 +43,7 @@ interface Appointment {
   serviceName?: string;
   servicePrice?: number;
   serviceDuration?: number;
+  status?: string;
 }
 
 const DEFAULT_SERVICES: BarberService[] = [
@@ -70,6 +71,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const [bookingStep, setBookingStep] = useState<'service' | 'date' | 'time'>('service');
   const [selectedServiceId, setSelectedServiceId] = useState<string>('');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [adminCanceledApps, setAdminCanceledApps] = useState<Appointment[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => {
     const d = new Date();
     d.setDate(1);
@@ -145,22 +147,22 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     });
 
     const unsubApps = onSnapshot(collection(db, 'appointments'), (snapshot) => {
-      const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Appointment));
-      setAppointments(list);
+      const all = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Appointment));
+      setAppointments(all.filter((a) => a.status !== 'canceled_by_admin'));
+      setAdminCanceledApps(all.filter((a) => a.status === 'canceled_by_admin' && a.userEmail === userEmail));
     });
 
     return () => {
       unsubSettings();
       unsubApps();
     };
-  }, []);
+  }, [userEmail]);
 
   const enabledServices = (settings.services && settings.services.length > 0 ? settings.services : DEFAULT_SERVICES)
     .filter((s) => s.enabled !== false);
 
   const activeService = enabledServices.find((s) => s.id === selectedServiceId) || null;
 
-  // Reset to step 1 if admin disables the selected service
   useEffect(() => {
     if (selectedServiceId && !activeService) {
       setSelectedServiceId('');
@@ -257,10 +259,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const todayStr = formatDate(now);
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-  // Returns visible slots for the day:
-  // - Admin-disabled/blocked slots are completely hidden (not returned)
-  // - Slots taken by a person (customer or manual admin booking) are returned with status 'taken'
-  // - Open slots are returned with status 'free'
   const getVisibleSlotsForDate = (dateStr: string, serviceDuration: number) => {
     if (!isServiceAllowedOnDate(dateStr, serviceDuration)) return [];
     const d = new Date(dateStr + 'T00:00:00');
@@ -277,10 +275,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       const isPast = dateStr === todayStr && startMins <= currentMinutes;
       if (isPast) continue;
 
-      // Completely hide slots that admin turned off/blocked
       if (isSlotBlockedByAdmin(dateStr, time, serviceDuration)) continue;
 
-      // Show slots booked by a person (including manual bookings by admin) as 'taken'
       if (isSlotBookedByPerson(dateStr, time, serviceDuration)) {
         visible.push({ time, status: 'taken' });
       } else {
@@ -410,6 +406,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         serviceName: activeService.name,
         servicePrice: activeService.price,
         serviceDuration: activeService.duration,
+        status: 'active',
         createdAt: Date.now(),
       });
 
@@ -448,6 +445,14 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       showToast('התור בוטל בהצלחה');
     } catch {
       showToast('שגיאה בביטול התור');
+    }
+  };
+
+  const handleDismissCanceledAlert = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'appointments', id));
+    } catch {
+      showToast('שגיאה בהסרת ההודעה');
     }
   };
 
@@ -492,12 +497,15 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
             <InstallAppButton />
             <button
               onClick={() => setSidebarOpen(true)}
-              className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
+              className="relative bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
             >
               <span>התורים שלי</span>
               <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">
                 {myActiveFutureAppointments.length}{maxActiveLimit > 0 ? `/${maxActiveLimit}` : ''}
               </span>
+              {adminCanceledApps.length > 0 && (
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-600 border border-zinc-950 animate-ping" />
+              )}
             </button>
             <button
               onClick={handleConfirmLogout}
@@ -512,6 +520,21 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       {/* Main Content */}
       <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 space-y-5">
         
+        {/* Alert Banner if Admin Canceled an Appointment */}
+        {adminCanceledApps.length > 0 && (
+          <div className="bg-rose-950/60 border border-rose-500/50 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <span className="text-rose-200 font-bold">
+              ⚠️ יש לך {adminCanceledApps.length === 1 ? 'תור שבוטל' : `${adminCanceledApps.length} תורים שבוטלו`} על ידי האדמין. פתח את &quot;התורים שלי&quot; לפרטים.
+            </span>
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="bg-rose-500 hover:bg-rose-400 text-white font-bold px-3 py-1.5 rounded-lg self-start sm:self-auto"
+            >
+              צפה בפרטים
+            </button>
+          </div>
+        )}
+
         {/* Quota Warning Banner */}
         {reachedBookingQuota && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
@@ -527,7 +550,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           </div>
         )}
 
-        {/* STEP 1: SERVICE SELECTION ONLY (No calendar shown until selected) */}
+        {/* STEP 1: SERVICE SELECTION ONLY */}
         {bookingStep === 'service' && (
           <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
             <div className="text-center space-y-1 pb-2">
@@ -567,17 +590,16 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           </section>
         )}
 
-        {/* STEP 2 & 3: CALENDAR (and TIME SLOTS after a day is clicked) */}
+        {/* STEP 2 & 3: CALENDAR & TIME SLOTS */}
         {(bookingStep === 'date' || bookingStep === 'time') && activeService && (
           <div className="space-y-5">
-            {/* Selected Service Summary Bar + Change Button */}
             <div className="bg-zinc-900 border border-amber-500/30 rounded-2xl p-3.5 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <span className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center font-bold">✂</span>
                 <div>
                   <div className="text-xs text-zinc-400">טיפול נבחר:</div>
                   <div className="text-sm font-bold text-white">
-                    {activeService.name} <span className="text-amber-400">({activeService.duration} דק' • ₪{activeService.price})</span>
+                    {activeService.name} <span className="text-amber-400">({activeService.duration} דק&apos; • ₪{activeService.price})</span>
                   </div>
                 </div>
               </div>
@@ -592,7 +614,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               </button>
             </div>
 
-            {/* Calendar Section */}
             <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -624,7 +645,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               </div>
 
               <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-zinc-400 mb-2">
-                <div>א'</div><div>ב'</div><div>ג'</div><div>ד'</div><div>ה'</div><div>ו'</div><div className="text-rose-400">ש'</div>
+                <div>א&apos;</div><div>ב&apos;</div><div>ג&apos;</div><div>ד&apos;</div><div>ה&apos;</div><div>ו&apos;</div><div className="text-rose-400">ש&apos;</div>
               </div>
 
               <div className="grid grid-cols-7 gap-1.5">
@@ -663,7 +684,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               </div>
             </section>
 
-            {/* STEP 3: Time Slots (Shown ONLY after a day is selected) */}
+            {/* STEP 3: Time Slots */}
             {bookingStep === 'time' && selectedDateStr && selectedDateObj && (
               <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
                 <div className="mb-4 pb-3 border-b border-zinc-800 flex items-center justify-between">
@@ -726,7 +747,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               <div className="flex items-center justify-between">
                 <span className="text-xs text-zinc-400">שירות נבחר:</span>
                 <span className="text-xs font-bold text-amber-400">
-                  {activeService.name} ({activeService.duration} דק') • ₪{activeService.price}
+                  {activeService.name} ({activeService.duration} דק&apos;) • ₪{activeService.price}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -827,7 +848,27 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {myAppointments.length === 0 ? (
+              {/* Canceled by Admin Notifications */}
+              {adminCanceledApps.map((cApp) => {
+                const cd = new Date(cApp.date + 'T00:00:00');
+                const cSrv = cApp.serviceName || 'תספורת';
+                return (
+                  <div key={cApp.id} className="bg-rose-950/50 border border-rose-500/50 rounded-xl p-3.5 space-y-2.5">
+                    <div className="text-xs font-bold text-rose-300 leading-relaxed">
+                      ⚠️ התור שלך ({cSrv} — יום {daysHe[cd.getDay()]}, {cd.getDate()}/{cd.getMonth() + 1} בשעה {cApp.time}) בוטל על ידי האדמין - מחק ביומן אם הוספת
+                    </div>
+                    <button
+                      onClick={() => handleDismissCanceledAlert(cApp.id)}
+                      className="w-full bg-rose-500/20 hover:bg-rose-500 text-rose-200 hover:text-white border border-rose-500/40 text-xs font-bold py-1.5 rounded-lg transition"
+                    >
+                      הבנתי, הסר הודעה ✓
+                    </button>
+                  </div>
+                );
+              })}
+
+              {/* Active Appointments */}
+              {myAppointments.length === 0 && adminCanceledApps.length === 0 ? (
                 <p className="text-center text-zinc-500 text-sm py-8">אין לך תורים פעילים בחשבון זה</p>
               ) : (
                 myAppointments.map((app) => {
@@ -847,7 +888,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                           )}
                         </div>
                         <p className="text-xs font-medium text-zinc-200 mt-1">
-                          {srvName} ({srvDur} דק') — {app.firstName} {app.lastName}
+                          {srvName} ({srvDur} דק&apos;) — {app.firstName} {app.lastName}
                         </p>
                         <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
                       </div>
