@@ -6,6 +6,7 @@ import { db } from '../lib/firebase';
 import AnnouncementBanner from './AnnouncementBanner';
 import ImLateButton from './ImLateButton';
 import OfflineBanner from './OfflineBanner';
+import BanGuard from './BanGuard';
 
 interface LobbyProps {
   userEmail: string;
@@ -422,6 +423,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
       <OfflineBanner />
+	  <BanGuard userEmail={userEmail} onBannedLogout={onLogout} />
       <AnnouncementBanner />
 
       {/* Header */}
