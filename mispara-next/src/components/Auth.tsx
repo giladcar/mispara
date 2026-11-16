@@ -11,7 +11,6 @@ interface AuthProps {
 export default function Auth({ onLoginSuccess }: AuthProps) {
   const [email, setEmail] = useState('');
   const [step, setStep] = useState<'email' | 'otp'>('email');
-  const [generatedCode, setGeneratedCode] = useState('');
   const [inputCode, setInputCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -37,22 +36,20 @@ export default function Auth({ onLoginSuccess }: AuthProps) {
         return;
       }
 
-      // 2. Not blocked -> proceed to generate and send OTP email
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      // 2. Not blocked -> ask server to generate and send OTP email
       const res = await fetch('/api/send-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, code }),
+        body: JSON.stringify({ email: cleanEmail }),
       });
 
       const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'שגיאה בשליחת המייל. ודא שהגדרת GMAIL_APP_PASSWORD ב-Vercel.');
+      if (!res.ok || !data.success) {
+        setError(data.error || 'שגיאה בשליחת המייל.');
         setLoading(false);
         return;
       }
 
-      setGeneratedCode(code);
       setStep('otp');
     } catch {
       setError('שגיאת תקשורת מול השרת');
@@ -61,15 +58,38 @@ export default function Auth({ onLoginSuccess }: AuthProps) {
     }
   };
 
-  const handleVerifyCode = (e: React.FormEvent) => {
+  const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (inputCode.trim() === generatedCode) {
-      const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanCode = inputCode.trim();
+
+    if (!cleanCode) {
+      setError('נא להזין את קוד האימות');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/verify-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, code: cleanCode }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setError(data.error || 'קוד אימות שגוי או פג תוקף');
+        setLoading(false);
+        return;
+      }
+
       localStorage.setItem('barber_user_email', cleanEmail);
       onLoginSuccess(cleanEmail);
-    } else {
-      setError('קוד אימות שגוי, נסה שוב');
+    } catch {
+      setError('שגיאת תקשורת בעת אימות הקוד');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -131,9 +151,10 @@ export default function Auth({ onLoginSuccess }: AuthProps) {
             </div>
             <button
               type="submit"
-              className="w-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
+              disabled={loading}
+              className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold py-3 rounded-xl text-sm transition"
             >
-              אמת והיכנס למערכת
+              {loading ? 'מאמת קוד...' : 'אמת והיכנס למערכת'}
             </button>
             <button
               type="button"
