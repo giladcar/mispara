@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 interface AuthProps {
@@ -28,9 +28,10 @@ export default function Auth({ onLoginSuccess }: AuthProps) {
     setLoading(true);
     try {
       // 1. Check if user is blocked BEFORE sending any email
-      const blockedSnap = await getDoc(doc(db, 'blocked_users', cleanEmail));
-      if (blockedSnap.exists()) {
-        const reason = blockedSnap.data().reason || 'הפרת נהלי המספרה';
+      const q = query(collection(db, 'blocked_users'), where('email', '==', cleanEmail));
+      const blockedSnap = await getDocs(q);
+      if (!blockedSnap.empty) {
+        const reason = blockedSnap.docs[0].data().reason || 'הפרת נהלי המספרה';
         setError(`אתה נחסמת (${reason})`);
         setLoading(false);
         return;
