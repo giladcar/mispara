@@ -9,8 +9,8 @@ interface BeforeInstallPromptEvent extends Event {
 
 export default function InstallAppButton() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isIOS, setIsIOS] = useState(false);
-  const [showIOSModal, setShowIOSModal] = useState(false);
+  const [browserType, setBrowserType] = useState<'default' | 'ios' | 'firefox'>('default');
+  const [showHelpModal, setShowHelpModal] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
 
   useEffect(() => {
@@ -23,8 +23,12 @@ export default function InstallAppButton() {
       return;
     }
 
-    const iosDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) && !('MSStream' in window);
-    setIsIOS(iosDevice);
+    const ua = navigator.userAgent;
+    if (/iPad|iPhone|iPod/.test(ua) && !('MSStream' in window)) {
+      setBrowserType('ios');
+    } else if (/Firefox|FxiOS/i.test(ua)) {
+      setBrowserType('firefox');
+    }
 
     const handleBeforeInstall = (e: Event) => {
       e.preventDefault();
@@ -45,20 +49,19 @@ export default function InstallAppButton() {
     };
   }, []);
 
-  if (isInstalled || (!deferredPrompt && !isIOS)) return null;
+  if (isInstalled || (!deferredPrompt && browserType === 'default')) return null;
 
   const handleInstallClick = async () => {
-    if (isIOS) {
-      setShowIOSModal(true);
+    if (deferredPrompt) {
+      await deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setIsInstalled(true);
+      }
+      setDeferredPrompt(null);
       return;
     }
-    if (!deferredPrompt) return;
-    await deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setIsInstalled(true);
-    }
-    setDeferredPrompt(null);
+    setShowHelpModal(true);
   };
 
   return (
@@ -73,7 +76,7 @@ export default function InstallAppButton() {
         <span className="sm:hidden">התקן</span>
       </button>
 
-      {showIOSModal && (
+      {showHelpModal && (
         <div
           dir="rtl"
           className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
@@ -82,14 +85,28 @@ export default function InstallAppButton() {
             <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center text-2xl mx-auto">
               📲
             </div>
-            <h3 className="text-lg font-black text-white">התקנת האפליקציה באייפון</h3>
-            <ol className="text-right text-xs text-zinc-300 space-y-2.5 bg-zinc-950 p-4 rounded-xl border border-zinc-800">
-              <li>1. לחץ על כפתור השיתוף <b>(ריבוע עם חץ למעלה ⬆️)</b> בתחתית Safari.</li>
-              <li>2. גלול למטה ובחר ב-<b>&quot;הוסף למסך הבית&quot; (Add to Home Screen)</b>.</li>
-              <li>3. לחץ על <b>&quot;הוסף&quot; (Add)</b> בפינה העליונה.</li>
-            </ol>
+
+            {browserType === 'ios' ? (
+              <>
+                <h3 className="text-lg font-black text-white">התקנת האפליקציה באייפון</h3>
+                <ol className="text-right text-xs text-zinc-300 space-y-2.5 bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  <li>1. לחץ על כפתור השיתוף <b>(ריבוע עם חץ למעלה ⬆️)</b> בתחתית Safari.</li>
+                  <li>2. גלול למטה ובחר ב-<b>&quot;הוסף למסך הבית&quot; (Add to Home Screen)</b>.</li>
+                  <li>3. לחץ על <b>&quot;הוסף&quot; (Add)</b> בפינה העליונה.</li>
+                </ol>
+              </>
+            ) : (
+              <>
+                <h3 className="text-lg font-black text-white">התקנה דרך דפדפן Firefox</h3>
+                <ol className="text-right text-xs text-zinc-300 space-y-2.5 bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  <li>1. <b>בטלפון (אנדרואיד):</b> לחץ על <b>שלוש הנקודות (⋮)</b> בפינה -&gt; בחר ב-<b>&quot;התקן&quot; (Install)</b> או <b>&quot;הוסף למסך הבית&quot;</b>.</li>
+                  <li>2. <b>במחשב:</b> Firefox אינו תומך בהתקנת אפליקציות. פתח את הקישור ב-<b>Chrome</b> או <b>Edge</b> כדי להתקין בלחיצה אחת.</li>
+                </ol>
+              </>
+            )}
+
             <button
-              onClick={() => setShowIOSModal(false)}
+              onClick={() => setShowHelpModal(false)}
               className="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold py-2.5 rounded-xl text-xs"
             >
               הבנתי, תודה!
