@@ -9,7 +9,6 @@ import OfflineBanner from './OfflineBanner';
 import BanGuard from './BanGuard';
 import InstallAppButton from './InstallAppButton';
 
-
 interface LobbyProps {
   userEmail: string;
   onLogout: () => void;
@@ -67,6 +66,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     blockedSlots: [] as string[],
   });
 
+  // Wizard flow: 'service' -> 'date' -> 'time'
+  const [bookingStep, setBookingStep] = useState<'service' | 'date' | 'time'>('service');
   const [selectedServiceId, setSelectedServiceId] = useState<string>('');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => {
@@ -78,7 +79,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const formatDate = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-  const [selectedDateStr, setSelectedDateStr] = useState(() => formatDate(new Date()));
+  const [selectedDateStr, setSelectedDateStr] = useState<string>('');
   const [pendingSlot, setPendingSlot] = useState<string | null>(null);
   const [lastBookedCalUrl, setLastBookedCalUrl] = useState<string | null>(null);
   const [firstName, setFirstName] = useState('');
@@ -159,6 +160,15 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   const activeService = enabledServices.find((s) => s.id === selectedServiceId) || null;
 
+  // Reset to step 1 if admin disables the selected service
+  useEffect(() => {
+    if (selectedServiceId && !activeService) {
+      setSelectedServiceId('');
+      setSelectedDateStr('');
+      setBookingStep('service');
+    }
+  }, [selectedServiceId, activeService]);
+
   const timeToMins = (t: string) => {
     const [h, m] = t.split(':').map(Number);
     return h * 60 + m;
@@ -211,56 +221,90 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     return slots;
   };
 
-  const isSlotAvailableForService = (dateStr: string, timeStr: string, serviceDuration: number) => {
-    if (!isServiceAllowedOnDate(dateStr, serviceDuration)) return false;
-
+  const isSlotBlockedByAdmin = (dateStr: string, timeStr: string, serviceDuration: number) => {
     const d = new Date(dateStr + 'T00:00:00');
     const rule = getDayRule(d.getDay());
-    const closeMins = timeToMins(rule.endTime);
     const startMins = timeToMins(timeStr);
     const endMins = startMins + serviceDuration;
-
-    if (endMins > closeMins) return false;
-
-    const hasAppOverlap = appointments.some((a) => {
-      if (a.date !== dateStr) return false;
-      const aStart = timeToMins(a.time);
-      const aDur = Number(a.serviceDuration) || Number(rule.interval) || 30;
-      const aEnd = aStart + aDur;
-      return startMins < aEnd && endMins > aStart;
-    });
-    if (hasAppOverlap) return false;
-
     const step = Number(rule.interval) || 30;
+
     const blockedForDate = (settings.blockedSlots || []).filter((s) => s.startsWith(dateStr + '_'));
-    const hasBlockedOverlap = blockedForDate.some((key) => {
+    return blockedForDate.some((key) => {
       const bTime = key.split('_')[1];
       if (!bTime) return false;
       const bStart = timeToMins(bTime);
       const bEnd = bStart + step;
       return startMins < bEnd && endMins > bStart;
     });
-    if (hasBlockedOverlap) return false;
-
-    return true;
   };
 
-  const isDayOpen = (dateStr: string) => {
-    if (!activeService) return false;
+  const isSlotBookedByPerson = (dateStr: string, timeStr: string, serviceDuration: number) => {
     const d = new Date(dateStr + 'T00:00:00');
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (d < today) return false;
     const rule = getDayRule(d.getDay());
-    if (!rule.enabled) return false;
-    if (settings.blockedDates && settings.blockedDates.includes(dateStr)) return false;
-    if (!isServiceAllowedOnDate(dateStr, activeService.duration)) return false;
-    return true;
+    const startMins = timeToMins(timeStr);
+    const endMins = startMins + serviceDuration;
+
+    return appointments.some((a) => {
+      if (a.date !== dateStr) return false;
+      const aStart = timeToMins(a.time);
+      const aDur = Number(a.serviceDuration) || Number(rule.interval) || 30;
+      const aEnd = aStart + aDur;
+      return startMins < aEnd && endMins > aStart;
+    });
   };
 
   const now = new Date();
   const todayStr = formatDate(now);
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Returns visible slots for the day:
+  // - Admin-disabled/blocked slots are completely hidden (not returned)
+  // - Slots taken by a person (customer or manual admin booking) are returned with status 'taken'
+  // - Open slots are returned with status 'free'
+  const getVisibleSlotsForDate = (dateStr: string, serviceDuration: number) => {
+    if (!isServiceAllowedOnDate(dateStr, serviceDuration)) return [];
+    const d = new Date(dateStr + 'T00:00:00');
+    const rule = getDayRule(d.getDay());
+    const closeMins = timeToMins(rule.endTime);
+
+    const baseSlots = generateBaseSlotsForDate(dateStr);
+    const visible: { time: string; status: 'free' | 'taken' }[] = [];
+
+    for (const time of baseSlots) {
+      const startMins = timeToMins(time);
+      if (startMins + serviceDuration > closeMins) continue;
+
+      const isPast = dateStr === todayStr && startMins <= currentMinutes;
+      if (isPast) continue;
+
+      // Completely hide slots that admin turned off/blocked
+      if (isSlotBlockedByAdmin(dateStr, time, serviceDuration)) continue;
+
+      // Show slots booked by a person (including manual bookings by admin) as 'taken'
+      if (isSlotBookedByPerson(dateStr, time, serviceDuration)) {
+        visible.push({ time, status: 'taken' });
+      } else {
+        visible.push({ time, status: 'free' });
+      }
+    }
+
+    return visible;
+  };
+
+  const countFreeSlotsForDate = (dateStr: string) => {
+    if (!activeService) return 0;
+    const d = new Date(dateStr + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (d < today) return 0;
+
+    const rule = getDayRule(d.getDay());
+    if (!rule.enabled) return 0;
+    if (settings.blockedDates && settings.blockedDates.includes(dateStr)) return 0;
+    if (!isServiceAllowedOnDate(dateStr, activeService.duration)) return 0;
+
+    return getVisibleSlotsForDate(dateStr, activeService.duration).filter((s) => s.status === 'free').length;
+  };
 
   const myAppointments = appointments
     .filter((a) => a.userEmail === userEmail)
@@ -295,9 +339,22 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startFmt}/${endFmt}&details=${details}`;
   };
 
+  const handleChooseService = (srvId: string) => {
+    setSelectedServiceId(srvId);
+    setSelectedDateStr('');
+    setPendingSlot(null);
+    setBookingStep('date');
+  };
+
+  const handleChooseDate = (dateStr: string) => {
+    setSelectedDateStr(dateStr);
+    setPendingSlot(null);
+    setBookingStep('time');
+  };
+
   const handleSelectSlot = (time: string) => {
     if (!activeService || activeService.enabled === false) {
-      showToast('נא לבחור קודם סוג שירות פעיל למעלה');
+      showToast('נא לבחור קודם סוג שירות פעיל');
       return;
     }
     if (reachedBookingQuota) {
@@ -310,7 +367,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   const handleBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pendingSlot || !activeService || activeService.enabled === false) {
+    if (!pendingSlot || !selectedDateStr || !activeService || activeService.enabled === false) {
       showToast('לא נבחר סוג שירות פעיל');
       setPendingSlot(null);
       return;
@@ -331,8 +388,11 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       return;
     }
 
-    if (!isSlotAvailableForService(selectedDateStr, pendingSlot, activeService.duration)) {
-      showToast('אופס! השעה הזו כבר לא פנויה או לא מתאימה למשך הטיפול ביום זה');
+    const stillFree = getVisibleSlotsForDate(selectedDateStr, activeService.duration).some(
+      (s) => s.time === pendingSlot && s.status === 'free'
+    );
+    if (!stillFree) {
+      showToast('אופס! השעה הזו כבר נתפסה');
       setPendingSlot(null);
       return;
     }
@@ -398,7 +458,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   const handleGoToday = () => {
     const today = new Date();
-    setSelectedDateStr(formatDate(today));
     setCurrentMonth(new Date(today.getFullYear(), today.getMonth(), 1));
   };
 
@@ -407,40 +466,30 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const firstDayIndex = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const selectedDateObj = new Date(selectedDateStr + 'T00:00:00');
-  const selectedDayRule = getDayRule(selectedDateObj.getDay());
-  const selectedDaySlots = generateBaseSlotsForDate(selectedDateStr);
-
-  const countAvailableForDate = (dateStr: string) => {
-    if (!activeService) return 0;
-    if (!isServiceAllowedOnDate(dateStr, activeService.duration)) return 0;
-    const slots = generateBaseSlotsForDate(dateStr);
-    return slots.filter((time) => {
-      const isPast = dateStr === todayStr && timeToMins(time) <= currentMinutes;
-      if (isPast) return false;
-      return isSlotAvailableForService(dateStr, time, activeService.duration);
-    }).length;
-  };
+  const selectedDateObj = selectedDateStr ? new Date(selectedDateStr + 'T00:00:00') : null;
+  const visibleSlotsForSelectedDate =
+    activeService && selectedDateStr ? getVisibleSlotsForDate(selectedDateStr, activeService.duration) : [];
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
       <OfflineBanner />
-	  <BanGuard userEmail={userEmail} onBannedLogout={onLogout} />
+      <BanGuard userEmail={userEmail} onBannedLogout={onLogout} />
       <AnnouncementBanner />
-<InstallAppButton />
+
       {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
-        <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg">✂</div>
             <div>
               <h1 className="text-base sm:text-lg font-black text-white leading-tight">המספרה</h1>
-              <p className="text-[11px] text-zinc-400 truncate max-w-[160px] sm:max-w-xs" dir="ltr">
+              <p className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-xs" dir="ltr">
                 {firstName ? `${firstName} ${lastName}` : userEmail}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <InstallAppButton />
             <button
               onClick={() => setSidebarOpen(true)}
               className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
@@ -461,7 +510,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-6 space-y-6">
+      <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 space-y-5">
         
         {/* Quota Warning Banner */}
         {reachedBookingQuota && (
@@ -478,177 +527,195 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           </div>
         )}
 
-        {/* Step 1: Service Selector */}
-        <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-white flex items-center gap-2">
-              <span className="w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-xs font-black flex items-center justify-center">1</span>
-              בחר סוג שירות / טיפול (חובה)
-            </h2>
-            {!activeService && (
-              <span className="text-[11px] text-amber-400 font-bold animate-pulse">👈 בחר טיפול כדי לפתוח את היומן</span>
-            )}
-          </div>
-
-          {enabledServices.length === 0 ? (
-            <div className="text-center py-6 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl">
-              אין כרגע שירותים זמינים להזמנה. נסה שוב מאוחר יותר.
+        {/* STEP 1: SERVICE SELECTION ONLY (No calendar shown until selected) */}
+        {bookingStep === 'service' && (
+          <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
+            <div className="text-center space-y-1 pb-2">
+              <span className="inline-block bg-amber-500/15 text-amber-400 border border-amber-500/30 text-xs font-bold px-3 py-1 rounded-full">
+                שלב 1 מתוך 3
+              </span>
+              <h2 className="text-xl font-black text-white">איזה טיפול תרצה לקבוע?</h2>
+              <p className="text-xs text-zinc-400">בחר את סוג הטיפול כדי לעבור לבחירת יום פנוי ביומן</p>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              {enabledServices.map((srv) => {
-                const isSelected = activeService?.id === srv.id;
-                return (
+
+            {enabledServices.length === 0 ? (
+              <div className="text-center py-8 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl">
+                אין כרגע שירותים זמינים להזמנה. נסה שוב מאוחר יותר.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {enabledServices.map((srv) => (
                   <button
                     key={srv.id}
-                    onClick={() => setSelectedServiceId(srv.id)}
-                    className={`p-3.5 rounded-xl border text-right transition flex items-center justify-between ${
-                      isSelected
-                        ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-500/10'
-                        : 'bg-zinc-950 border-zinc-800 hover:border-amber-500/50 text-zinc-300'
-                    }`}
+                    onClick={() => handleChooseService(srv.id)}
+                    className="p-4 rounded-2xl border bg-zinc-950 border-zinc-800 hover:border-amber-500 hover:bg-amber-500/10 text-right transition flex items-center justify-between group"
                   >
                     <div>
-                      <div className={`text-sm font-bold ${isSelected ? 'text-amber-400' : 'text-white'}`}>{srv.name}</div>
-                      <div className="text-[11px] text-zinc-400 mt-0.5">⏱ {srv.duration} דקות</div>
+                      <div className="text-base font-bold text-white group-hover:text-amber-400 transition">{srv.name}</div>
+                      <div className="text-xs text-zinc-400 mt-1">⏱ משך הטיפול: {srv.duration} דקות</div>
                     </div>
-                    <div className={`text-sm font-black px-2.5 py-1 rounded-lg ${isSelected ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-900 text-amber-400'}`}>
-                      ₪{srv.price}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        {/* Step 2: Calendar & Time Slots */}
-        <div className={`grid grid-cols-1 md:grid-cols-12 gap-6 transition ${!activeService ? 'opacity-50 pointer-events-none select-none' : ''}`}>
-          {/* Calendar */}
-          <section className="md:col-span-7 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-xs font-black flex items-center justify-center">2</span>
-                {monthsHe[month]} {year}
-              </h2>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={handleGoToday}
-                  className="px-3 h-9 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 text-xs font-bold"
-                >
-                  היום
-                </button>
-                <button
-                  onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}
-                  className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
-                >
-                  ❯
-                </button>
-                <button
-                  onClick={() => setCurrentMonth(new Date(year, month + 1, 1))}
-                  className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
-                >
-                  ❮
-                </button>
-              </div>
-            </div>
-            <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-zinc-400 mb-2">
-              <div>א'</div><div>ב'</div><div>ג'</div><div>ד'</div><div>ה'</div><div>ו'</div><div className="text-rose-400">ש'</div>
-            </div>
-            <div className="grid grid-cols-7 gap-1.5">
-              {Array.from({ length: firstDayIndex }).map((_, i) => (
-                <div key={`empty-${i}`} />
-              ))}
-              {Array.from({ length: daysInMonth }).map((_, idx) => {
-                const day = idx + 1;
-                const dateStr = formatDate(new Date(year, month, day));
-                const open = isDayOpen(dateStr);
-                const isSelected = dateStr === selectedDateStr && open;
-                const availableCount = open ? countAvailableForDate(dateStr) : 0;
-
-                return (
-                  <button
-                    key={dateStr}
-                    disabled={!open}
-                    onClick={() => setSelectedDateStr(dateStr)}
-                    className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
-                      isSelected
-                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
-                        : open && availableCount > 0
-                        ? 'bg-zinc-950 border-zinc-800 hover:border-amber-500/60 text-white'
-                        : 'bg-zinc-950/30 border-transparent text-zinc-600 cursor-not-allowed'
-                    }`}
-                  >
-                    <span className="text-sm">{day}</span>
-                    {open && availableCount > 0 && (
-                      <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-zinc-900 font-bold' : 'text-emerald-400'}`}>
-                        {availableCount} פנויים
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-black px-3 py-1.5 rounded-xl bg-zinc-900 group-hover:bg-amber-500 text-amber-400 group-hover:text-zinc-950 transition">
+                        ₪{srv.price}
                       </span>
-                    )}
+                      <span className="text-zinc-500 group-hover:text-amber-400 text-lg">❮</span>
+                    </div>
                   </button>
-                );
-              })}
-            </div>
-          </section>
-
-          {/* Time Slots */}
-          <section className="md:col-span-5 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col">
-            <div className="mb-4 pb-3 border-b border-zinc-800">
-              <span className="text-xs text-amber-500 font-semibold">
-                {activeService ? `שעות פנויות עבור ${activeService.name} (${activeService.duration} דק')` : 'יש לבחור סוג שירות קודם'}
-              </span>
-              <h3 className="text-lg font-bold text-white mt-0.5">
-                יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()} ב{monthsHe[selectedDateObj.getMonth()]}
-              </h3>
-            </div>
-
-            {!activeService ? (
-              <div className="text-center py-10 text-zinc-500 text-sm">בחר סוג שירות למעלה כדי לראות שעות פנויות</div>
-            ) : !isServiceAllowedOnDate(selectedDateStr, activeService.duration) ? (
-              <div className="text-center py-10 text-amber-400/90 text-xs bg-amber-500/10 border border-amber-500/20 rounded-xl px-3">
-                השירות <b>{activeService.name}</b> ({activeService.duration} דק') נעול ביום {daysHe[selectedDateObj.getDay()]} (אורך התורים ביום זה הוא {selectedDayRule.interval} דק'). בחר יום אחר בלוח השנה.
+                ))}
               </div>
-            ) : !isDayOpen(selectedDateStr) || selectedDaySlots.length === 0 ? (
-              <div className="text-center py-10 text-zinc-500 text-sm">המספרה סגורה בתאריך זה</div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                {selectedDaySlots.map((time) => {
-                  const isPast = selectedDateStr === todayStr && timeToMins(time) <= currentMinutes;
-                  const available = !isPast && isSlotAvailableForService(selectedDateStr, time, activeService.duration);
+            )}
+          </section>
+        )}
 
-                  if (!available) {
-                    return (
-                      <div
-                        key={time}
-                        className="py-3 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-600 text-center text-sm line-through"
-                      >
-                        {time}
-                      </div>
-                    );
-                  }
+        {/* STEP 2 & 3: CALENDAR (and TIME SLOTS after a day is clicked) */}
+        {(bookingStep === 'date' || bookingStep === 'time') && activeService && (
+          <div className="space-y-5">
+            {/* Selected Service Summary Bar + Change Button */}
+            <div className="bg-zinc-900 border border-amber-500/30 rounded-2xl p-3.5 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center font-bold">✂</span>
+                <div>
+                  <div className="text-xs text-zinc-400">טיפול נבחר:</div>
+                  <div className="text-sm font-bold text-white">
+                    {activeService.name} <span className="text-amber-400">({activeService.duration} דק' • ₪{activeService.price})</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setBookingStep('service');
+                  setSelectedDateStr('');
+                }}
+                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold px-3 py-2 rounded-xl transition"
+              >
+                החלף טיפול ↻
+              </button>
+            </div>
+
+            {/* Calendar Section */}
+            <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <span className="text-[11px] text-amber-400 font-bold">שלב 2: בחר יום ביומן</span>
+                  <h2 className="text-lg font-bold text-white">
+                    {monthsHe[month]} {year}
+                  </h2>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={handleGoToday}
+                    className="px-3 h-9 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 text-xs font-bold"
+                  >
+                    היום
+                  </button>
+                  <button
+                    onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}
+                    className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+                  >
+                    ❯
+                  </button>
+                  <button
+                    onClick={() => setCurrentMonth(new Date(year, month + 1, 1))}
+                    className="w-9 h-9 rounded-lg bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-zinc-300"
+                  >
+                    ❮
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-zinc-400 mb-2">
+                <div>א'</div><div>ב'</div><div>ג'</div><div>ד'</div><div>ה'</div><div>ו'</div><div className="text-rose-400">ש'</div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-1.5">
+                {Array.from({ length: firstDayIndex }).map((_, i) => (
+                  <div key={`empty-${i}`} />
+                ))}
+                {Array.from({ length: daysInMonth }).map((_, idx) => {
+                  const day = idx + 1;
+                  const dateStr = formatDate(new Date(year, month, day));
+                  const freeCount = countFreeSlotsForDate(dateStr);
+                  const canPick = freeCount > 0;
+                  const isSelected = dateStr === selectedDateStr && canPick;
 
                   return (
                     <button
-                      key={time}
-                      onClick={() => handleSelectSlot(time)}
-                      className={`py-3 rounded-xl border font-bold text-sm transition ${
-                        reachedBookingQuota
-                          ? 'bg-zinc-950 border-zinc-800 text-zinc-500 cursor-not-allowed'
-                          : 'bg-zinc-950 hover:bg-amber-500 hover:text-zinc-950 border-zinc-700 hover:border-amber-400 text-white'
+                      key={dateStr}
+                      disabled={!canPick}
+                      onClick={() => handleChooseDate(dateStr)}
+                      className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
+                        isSelected
+                          ? 'bg-amber-500 text-zinc-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
+                          : canPick
+                          ? 'bg-zinc-950 border-zinc-800 hover:border-amber-500/60 text-white'
+                          : 'bg-zinc-950/30 border-transparent text-zinc-600 cursor-not-allowed opacity-50'
                       }`}
                     >
-                      {time}
+                      <span className="text-sm">{day}</span>
+                      {canPick && (
+                        <span className={`text-[9px] mt-0.5 ${isSelected ? 'text-zinc-900 font-bold' : 'text-emerald-400'}`}>
+                          {freeCount} פנויים
+                        </span>
+                      )}
                     </button>
                   );
                 })}
               </div>
+            </section>
+
+            {/* STEP 3: Time Slots (Shown ONLY after a day is selected) */}
+            {bookingStep === 'time' && selectedDateStr && selectedDateObj && (
+              <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
+                <div className="mb-4 pb-3 border-b border-zinc-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] text-amber-400 font-bold">שלב 3: בחר שעה</span>
+                    <h3 className="text-lg font-bold text-white mt-0.5">
+                      יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()} ב{monthsHe[selectedDateObj.getMonth()]}
+                    </h3>
+                  </div>
+                </div>
+
+                {visibleSlotsForSelectedDate.length === 0 ? (
+                  <div className="text-center py-8 text-zinc-500 text-sm">אין שעות זמינות ביום זה</div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {visibleSlotsForSelectedDate.map((slot) => {
+                      if (slot.status === 'taken') {
+                        return (
+                          <div
+                            key={slot.time}
+                            className="py-2.5 px-2 rounded-xl bg-zinc-950/50 border border-zinc-800/60 text-zinc-500 text-center flex flex-col items-center justify-center select-none"
+                          >
+                            <span className="text-sm line-through">{slot.time}</span>
+                            <span className="text-[10px] font-bold text-rose-400/80 mt-0.5">תפוס</span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <button
+                          key={slot.time}
+                          onClick={() => handleSelectSlot(slot.time)}
+                          className={`py-3 rounded-xl border font-bold text-sm transition ${
+                            reachedBookingQuota
+                              ? 'bg-zinc-950 border-zinc-800 text-zinc-500 cursor-not-allowed'
+                              : 'bg-zinc-950 hover:bg-amber-500 hover:text-zinc-950 border-zinc-700 hover:border-amber-400 text-white'
+                          }`}
+                        >
+                          {slot.time}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
             )}
-          </section>
-        </div>
+          </div>
+        )}
       </main>
 
       {/* Booking Modal */}
-      {pendingSlot && activeService && (
+      {pendingSlot && activeService && selectedDateObj && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex justify-between items-center mb-4">
