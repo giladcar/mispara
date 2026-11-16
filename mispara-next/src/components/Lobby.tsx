@@ -5,6 +5,7 @@ import { doc, getDoc, setDoc, collection, addDoc, deleteDoc, onSnapshot } from '
 import { db } from '../lib/firebase';
 import AnnouncementBanner from './AnnouncementBanner';
 import ImLateButton from './ImLateButton';
+import OfflineBanner from './OfflineBanner';
 
 interface LobbyProps {
   userEmail: string;
@@ -399,6 +400,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
+	<OfflineBanner />
 	<AnnouncementBanner />
       {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
