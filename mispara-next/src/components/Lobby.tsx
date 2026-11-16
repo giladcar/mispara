@@ -7,6 +7,8 @@ import AnnouncementBanner from './AnnouncementBanner';
 import ImLateButton from './ImLateButton';
 import OfflineBanner from './OfflineBanner';
 import BanGuard from './BanGuard';
+import InstallAppButton from './InstallAppButton';
+
 
 interface LobbyProps {
   userEmail: string;
@@ -425,7 +427,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       <OfflineBanner />
 	  <BanGuard userEmail={userEmail} onBannedLogout={onLogout} />
       <AnnouncementBanner />
-
+<InstallAppButton />
       {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center justify-between">
