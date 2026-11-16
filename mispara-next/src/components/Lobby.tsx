@@ -26,6 +26,7 @@ interface BarberService {
   name: string;
   price: number;
   duration: number;
+  enabled?: boolean;
 }
 
 interface Appointment {
@@ -43,9 +44,9 @@ interface Appointment {
 }
 
 const DEFAULT_SERVICES: BarberService[] = [
-  { id: 'srv_1', name: 'תספורת גבר', price: 60, duration: 30 },
-  { id: 'srv_2', name: 'תספורת + זקן', price: 80, duration: 45 },
-  { id: 'srv_3', name: 'תספורת ילד', price: 50, duration: 30 },
+  { id: 'srv_1', name: 'תספורת גבר', price: 60, duration: 30, enabled: true },
+  { id: 'srv_2', name: 'תספורת + זקן', price: 80, duration: 45, enabled: true },
+  { id: 'srv_3', name: 'תספורת ילד', price: 50, duration: 30, enabled: true },
 ];
 
 export default function Lobby({ userEmail, onLogout }: LobbyProps) {
@@ -63,7 +64,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     blockedSlots: [] as string[],
   });
 
-  const [selectedServiceId, setSelectedServiceId] = useState<string>('srv_1');
+  const [selectedServiceId, setSelectedServiceId] = useState<string>('');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => {
     const d = new Date();
@@ -150,8 +151,10 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     };
   }, []);
 
-  const servicesList = settings.services && settings.services.length > 0 ? settings.services : DEFAULT_SERVICES;
-  const activeService = servicesList.find((s) => s.id === selectedServiceId) || servicesList[0];
+  const enabledServices = (settings.services && settings.services.length > 0 ? settings.services : DEFAULT_SERVICES)
+    .filter((s) => s.enabled !== false);
+
+  const activeService = enabledServices.find((s) => s.id === selectedServiceId) || null;
 
   const timeToMins = (t: string) => {
     const [h, m] = t.split(':').map(Number);
@@ -178,6 +181,13 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     };
   };
 
+  const isServiceAllowedOnDate = (dateStr: string, serviceDuration: number) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const rule = getDayRule(d.getDay());
+    if (!rule.enabled) return false;
+    return serviceDuration <= (Number(rule.interval) || 30);
+  };
+
   const generateBaseSlotsForDate = (dateStr: string) => {
     const d = new Date(dateStr + 'T00:00:00');
     const rule = getDayRule(d.getDay());
@@ -198,8 +208,9 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     return slots;
   };
 
-  // Checks if a service of `duration` starting at `timeStr` fits before closing time & doesn't overlap existing bookings or blocked slots
   const isSlotAvailableForService = (dateStr: string, timeStr: string, serviceDuration: number) => {
+    if (!isServiceAllowedOnDate(dateStr, serviceDuration)) return false;
+
     const d = new Date(dateStr + 'T00:00:00');
     const rule = getDayRule(d.getDay());
     const closeMins = timeToMins(rule.endTime);
@@ -208,7 +219,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
     if (endMins > closeMins) return false;
 
-    // Check overlap with existing appointments
     const hasAppOverlap = appointments.some((a) => {
       if (a.date !== dateStr) return false;
       const aStart = timeToMins(a.time);
@@ -218,7 +228,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     });
     if (hasAppOverlap) return false;
 
-    // Check overlap with admin-blocked slots
     const step = Number(rule.interval) || 30;
     const blockedForDate = (settings.blockedSlots || []).filter((s) => s.startsWith(dateStr + '_'));
     const hasBlockedOverlap = blockedForDate.some((key) => {
@@ -234,6 +243,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   };
 
   const isDayOpen = (dateStr: string) => {
+    if (!activeService) return false;
     const d = new Date(dateStr + 'T00:00:00');
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -241,6 +251,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     const rule = getDayRule(d.getDay());
     if (!rule.enabled) return false;
     if (settings.blockedDates && settings.blockedDates.includes(dateStr)) return false;
+    if (!isServiceAllowedOnDate(dateStr, activeService.duration)) return false;
     return true;
   };
 
@@ -252,7 +263,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     .filter((a) => a.userEmail === userEmail)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 
-  // Active future appointments for quota limit
   const myActiveFutureAppointments = myAppointments.filter((a) => {
     if (a.date > todayStr) return true;
     if (a.date === todayStr && timeToMins(a.time) > currentMinutes) return true;
@@ -283,6 +293,10 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   };
 
   const handleSelectSlot = (time: string) => {
+    if (!activeService || activeService.enabled === false) {
+      showToast('נא לבחור קודם סוג שירות פעיל למעלה');
+      return;
+    }
     if (reachedBookingQuota) {
       showToast(`הגעת למקסימום של ${maxActiveLimit} תורים פעילים במקביל. בטל תור קיים כדי לקבוע חדש.`);
       setSidebarOpen(true);
@@ -293,7 +307,11 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   const handleBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pendingSlot) return;
+    if (!pendingSlot || !activeService || activeService.enabled === false) {
+      showToast('לא נבחר סוג שירות פעיל');
+      setPendingSlot(null);
+      return;
+    }
 
     if (reachedBookingQuota) {
       showToast(`ניתן להחזיק עד ${maxActiveLimit} תורים עתידיים במקביל`);
@@ -311,7 +329,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     }
 
     if (!isSlotAvailableForService(selectedDateStr, pendingSlot, activeService.duration)) {
-      showToast('אופס! השעה הזו כבר לא פנויה למשך הטיפול שנבחר');
+      showToast('אופס! השעה הזו כבר לא פנויה או לא מתאימה למשך הטיפול ביום זה');
       setPendingSlot(null);
       return;
     }
@@ -387,9 +405,12 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
   const selectedDateObj = new Date(selectedDateStr + 'T00:00:00');
+  const selectedDayRule = getDayRule(selectedDateObj.getDay());
   const selectedDaySlots = generateBaseSlotsForDate(selectedDateStr);
 
   const countAvailableForDate = (dateStr: string) => {
+    if (!activeService) return 0;
+    if (!isServiceAllowedOnDate(dateStr, activeService.duration)) return 0;
     const slots = generateBaseSlotsForDate(dateStr);
     return slots.filter((time) => {
       const isPast = dateStr === todayStr && timeToMins(time) <= currentMinutes;
@@ -400,8 +421,9 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
-	<OfflineBanner />
-	<AnnouncementBanner />
+      <OfflineBanner />
+      <AnnouncementBanner />
+
       {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center justify-between">
@@ -437,7 +459,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       {/* Main Content */}
       <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-6 space-y-6">
         
-        {/* Quota Warning Banner if limit reached */}
+        {/* Quota Warning Banner */}
         {reachedBookingQuota && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
             <span className="text-amber-300 font-medium">
@@ -457,38 +479,47 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-bold text-white flex items-center gap-2">
               <span className="w-5 h-5 rounded-full bg-amber-500 text-zinc-950 text-xs font-black flex items-center justify-center">1</span>
-              בחר סוג שירות / טיפול
+              בחר סוג שירות / טיפול (חובה)
             </h2>
-            <span className="text-[11px] text-zinc-400">השעות ביומן מתעדכנות אוטומטית לפי משך הטיפול</span>
+            {!activeService && (
+              <span className="text-[11px] text-amber-400 font-bold animate-pulse">👈 בחר טיפול כדי לפתוח את היומן</span>
+            )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            {servicesList.map((srv) => {
-              const isSelected = srv.id === activeService.id;
-              return (
-                <button
-                  key={srv.id}
-                  onClick={() => setSelectedServiceId(srv.id)}
-                  className={`p-3.5 rounded-xl border text-right transition flex items-center justify-between ${
-                    isSelected
-                      ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-500/10'
-                      : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-300'
-                  }`}
-                >
-                  <div>
-                    <div className={`text-sm font-bold ${isSelected ? 'text-amber-400' : 'text-white'}`}>{srv.name}</div>
-                    <div className="text-[11px] text-zinc-400 mt-0.5">⏱ {srv.duration} דקות</div>
-                  </div>
-                  <div className={`text-sm font-black px-2.5 py-1 rounded-lg ${isSelected ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-900 text-amber-400'}`}>
-                    ₪{srv.price}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+
+          {enabledServices.length === 0 ? (
+            <div className="text-center py-6 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl">
+              אין כרגע שירותים זמינים להזמנה. נסה שוב מאוחר יותר.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {enabledServices.map((srv) => {
+                const isSelected = activeService?.id === srv.id;
+                return (
+                  <button
+                    key={srv.id}
+                    onClick={() => setSelectedServiceId(srv.id)}
+                    className={`p-3.5 rounded-xl border text-right transition flex items-center justify-between ${
+                      isSelected
+                        ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-500/10'
+                        : 'bg-zinc-950 border-zinc-800 hover:border-amber-500/50 text-zinc-300'
+                    }`}
+                  >
+                    <div>
+                      <div className={`text-sm font-bold ${isSelected ? 'text-amber-400' : 'text-white'}`}>{srv.name}</div>
+                      <div className="text-[11px] text-zinc-400 mt-0.5">⏱ {srv.duration} דקות</div>
+                    </div>
+                    <div className={`text-sm font-black px-2.5 py-1 rounded-lg ${isSelected ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-900 text-amber-400'}`}>
+                      ₪{srv.price}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {/* Step 2: Calendar & Time Slots */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+        <div className={`grid grid-cols-1 md:grid-cols-12 gap-6 transition ${!activeService ? 'opacity-50 pointer-events-none select-none' : ''}`}>
           {/* Calendar */}
           <section className="md:col-span-7 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
             <div className="flex items-center justify-between mb-4">
@@ -528,7 +559,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                 const day = idx + 1;
                 const dateStr = formatDate(new Date(year, month, day));
                 const open = isDayOpen(dateStr);
-                const isSelected = dateStr === selectedDateStr;
+                const isSelected = dateStr === selectedDateStr && open;
                 const availableCount = open ? countAvailableForDate(dateStr) : 0;
 
                 return (
@@ -560,14 +591,20 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           <section className="md:col-span-5 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col">
             <div className="mb-4 pb-3 border-b border-zinc-800">
               <span className="text-xs text-amber-500 font-semibold">
-                שעות פנויות עבור {activeService.name} ({activeService.duration} דק')
+                {activeService ? `שעות פנויות עבור ${activeService.name} (${activeService.duration} דק')` : 'יש לבחור סוג שירות קודם'}
               </span>
               <h3 className="text-lg font-bold text-white mt-0.5">
                 יום {daysHe[selectedDateObj.getDay()]}, {selectedDateObj.getDate()} ב{monthsHe[selectedDateObj.getMonth()]}
               </h3>
             </div>
 
-            {!isDayOpen(selectedDateStr) || selectedDaySlots.length === 0 ? (
+            {!activeService ? (
+              <div className="text-center py-10 text-zinc-500 text-sm">בחר סוג שירות למעלה כדי לראות שעות פנויות</div>
+            ) : !isServiceAllowedOnDate(selectedDateStr, activeService.duration) ? (
+              <div className="text-center py-10 text-amber-400/90 text-xs bg-amber-500/10 border border-amber-500/20 rounded-xl px-3">
+                השירות <b>{activeService.name}</b> ({activeService.duration} דק') נעול ביום {daysHe[selectedDateObj.getDay()]} (אורך התורים ביום זה הוא {selectedDayRule.interval} דק'). בחר יום אחר בלוח השנה.
+              </div>
+            ) : !isDayOpen(selectedDateStr) || selectedDaySlots.length === 0 ? (
               <div className="text-center py-10 text-zinc-500 text-sm">המספרה סגורה בתאריך זה</div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
@@ -607,7 +644,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       </main>
 
       {/* Booking Modal */}
-      {pendingSlot && (
+      {pendingSlot && activeService && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex justify-between items-center mb-4">
@@ -675,7 +712,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         </div>
       )}
 
-      {/* Booking Success + Add to Calendar Modal */}
+      {/* Booking Success Modal */}
       {lastBookedCalUrl && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-emerald-500/40 rounded-2xl max-w-sm w-full p-6 text-center shadow-2xl space-y-4">
@@ -700,16 +737,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           </div>
         </div>
       )}
-<p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
-                      </div>
-                      <ImLateButton
-                        date={app.date}
-                        time={app.time}
-                        firstName={app.firstName}
-                      />
-                      <div className="flex items-center gap-2 pt-2 border-t border-zinc-900">
-                        <a
-                          href={calUrl}
+
       {/* Sidebar My Appointments */}
       {sidebarOpen && (
         <>
@@ -752,6 +780,13 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                         </p>
                         <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
                       </div>
+
+                      <ImLateButton
+                        date={app.date}
+                        time={app.time}
+                        firstName={app.firstName}
+                      />
+
                       <div className="flex items-center gap-2 pt-2 border-t border-zinc-900">
                         <a
                           href={calUrl}
