@@ -112,8 +112,9 @@ export default function HomePage() {
   }
 
   return (
-  <SplashScreen />
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4" dir="rtl">
+	  <SplashScreen />
+
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 sm:p-8 shadow-2xl">
         <div className="flex flex-col items-center text-center mb-6">
           <div className="w-14 h-14 rounded-2xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-2xl mb-3 shadow-lg shadow-amber-500/20">
