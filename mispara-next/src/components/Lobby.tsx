@@ -14,6 +14,7 @@ import RescheduleModal from './RescheduleModal';
 import ContactBarberBtn from './ContactBarberBtn';
 import QuickRebook from './QuickRebook';
 import ReviewWidget from './ReviewWidget';
+import SplashScreen from './SplashScreen';
 
 interface LobbyProps {
   userEmail: string;
@@ -558,6 +559,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col" dir="rtl">
+	<SplashScreen />
       <OfflineBanner />
       <BanGuard userEmail={userEmail} onBannedLogout={onLogout} />
       <AnnouncementBanner />
