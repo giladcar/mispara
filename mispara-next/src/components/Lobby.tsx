@@ -8,6 +8,9 @@ import ImLateButton from './ImLateButton';
 import OfflineBanner from './OfflineBanner';
 import BanGuard from './BanGuard';
 import InstallAppButton from './InstallAppButton';
+import NavigateButton from './NavigateButton';
+import GalleryModal from './GalleryModal';
+import RescheduleModal from './RescheduleModal';
 
 interface LobbyProps {
   userEmail: string;
@@ -67,9 +70,9 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     blockedSlots: [] as string[],
   });
 
-  // Wizard flow: 'service' -> 'date' -> 'time'
   const [bookingStep, setBookingStep] = useState<'service' | 'date' | 'time'>('service');
   const [selectedServiceId, setSelectedServiceId] = useState<string>('');
+  const [reschedulingApp, setReschedulingApp] = useState<Appointment | null>(null);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [adminCanceledApps, setAdminCanceledApps] = useState<Appointment[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => {
@@ -167,6 +170,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
     if (selectedServiceId && !activeService) {
       setSelectedServiceId('');
       setSelectedDateStr('');
+      setReschedulingApp(null);
       setBookingStep('service');
     }
   }, [selectedServiceId, activeService]);
@@ -313,7 +317,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   });
 
   const maxActiveLimit = Number(settings.maxActivePerUser) || 0;
-  const reachedBookingQuota = maxActiveLimit > 0 && myActiveFutureAppointments.length >= maxActiveLimit;
+  // Bypass quota check while actively rescheduling an existing appointment
+  const reachedBookingQuota = !reschedulingApp && maxActiveLimit > 0 && myActiveFutureAppointments.length >= maxActiveLimit;
 
   const buildGoogleCalendarUrl = (
     dateStr: string,
@@ -336,10 +341,31 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   };
 
   const handleChooseService = (srvId: string) => {
+    setReschedulingApp(null);
     setSelectedServiceId(srvId);
     setSelectedDateStr('');
     setPendingSlot(null);
     setBookingStep('date');
+  };
+
+  const handleStartReschedule = (app: Appointment) => {
+    const matchedSrv =
+      enabledServices.find((s) => s.id === app.serviceId) ||
+      enabledServices.find((s) => s.name === app.serviceName) ||
+      enabledServices[0];
+
+    if (!matchedSrv) {
+      showToast('סוג הטיפול של תור זה אינו פעיל כרגע');
+      return;
+    }
+
+    setReschedulingApp(app);
+    setSelectedServiceId(matchedSrv.id);
+    setSelectedDateStr('');
+    setPendingSlot(null);
+    setBookingStep('date');
+    setSidebarOpen(false);
+    showToast('בחר יום ושעה חדשים להעברת התור 📅');
   };
 
   const handleChooseDate = (dateStr: string) => {
@@ -359,6 +385,59 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       return;
     }
     setPendingSlot(time);
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!reschedulingApp || !pendingSlot || !selectedDateStr || !activeService) return;
+
+    const stillFree = getVisibleSlotsForDate(selectedDateStr, activeService.duration).some(
+      (s) => s.time === pendingSlot && s.status === 'free'
+    );
+    if (!stillFree) {
+      showToast('אופס! השעה הזו כבר נתפסה');
+      setPendingSlot(null);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // 1. Create new appointment with same customer details
+      await addDoc(collection(db, 'appointments'), {
+        userEmail,
+        date: selectedDateStr,
+        time: pendingSlot,
+        firstName: reschedulingApp.firstName,
+        lastName: reschedulingApp.lastName,
+        phone: reschedulingApp.phone,
+        serviceId: activeService.id,
+        serviceName: activeService.name,
+        servicePrice: activeService.price,
+        serviceDuration: activeService.duration,
+        status: 'active',
+        createdAt: Date.now(),
+      });
+
+      // 2. Delete previous appointment
+      await deleteDoc(doc(db, 'appointments', reschedulingApp.id));
+
+      const calUrl = buildGoogleCalendarUrl(
+        selectedDateStr,
+        pendingSlot,
+        reschedulingApp.firstName,
+        reschedulingApp.lastName,
+        activeService.name,
+        activeService.duration
+      );
+
+      setReschedulingApp(null);
+      setPendingSlot(null);
+      setLastBookedCalUrl(calUrl);
+      showToast('התור הועבר למועד החדש בהצלחה! ✓');
+    } catch {
+      showToast('שגיאה בהעברת התור');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleBookSubmit = async (e: React.FormEvent) => {
@@ -483,21 +562,23 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
       {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
-        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg">✂</div>
-            <div>
+        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg shrink-0">✂</div>
+            <div className="min-w-0">
               <h1 className="text-base sm:text-lg font-black text-white leading-tight">המספרה</h1>
-              <p className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-xs" dir="ltr">
+              <p className="text-[11px] text-zinc-400 truncate max-w-[110px] sm:max-w-xs" dir="ltr">
                 {firstName ? `${firstName} ${lastName}` : userEmail}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <NavigateButton />
+            <GalleryModal />
             <InstallAppButton />
             <button
               onClick={() => setSidebarOpen(true)}
-              className="relative bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
+              className="relative bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
             >
               <span>התורים שלי</span>
               <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">
@@ -509,7 +590,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
             </button>
             <button
               onClick={handleConfirmLogout}
-              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-3 py-2 rounded-xl"
+              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-2.5 py-2 rounded-xl"
             >
               יציאה
             </button>
@@ -520,6 +601,25 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       {/* Main Content */}
       <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 space-y-5">
         
+        {/* Reschedule Active Banner */}
+        {reschedulingApp && (
+          <div className="bg-sky-500/15 border border-sky-500/40 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <span className="text-sky-300 font-bold">
+              🔄 מצב העברת תור: בחר יום ושעה חדשים להחלפת התור מ-{reschedulingApp.date} בשעה {reschedulingApp.time}
+            </span>
+            <button
+              onClick={() => {
+                setReschedulingApp(null);
+                setBookingStep('service');
+                setSelectedDateStr('');
+              }}
+              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold px-3 py-1.5 rounded-lg self-start sm:self-auto"
+            >
+              בטל העברה ✕
+            </button>
+          </div>
+        )}
+
         {/* Alert Banner if Admin Canceled an Appointment */}
         {adminCanceledApps.length > 0 && (
           <div className="bg-rose-950/60 border border-rose-500/50 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
@@ -603,15 +703,17 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                   </div>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setBookingStep('service');
-                  setSelectedDateStr('');
-                }}
-                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold px-3 py-2 rounded-xl transition"
-              >
-                החלף טיפול ↻
-              </button>
+              {!reschedulingApp && (
+                <button
+                  onClick={() => {
+                    setBookingStep('service');
+                    setSelectedDateStr('');
+                  }}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold px-3 py-2 rounded-xl transition"
+                >
+                  החלף טיפול ↻
+                </button>
+              )}
             </div>
 
             <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 shadow-xl">
@@ -735,8 +837,22 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         )}
       </main>
 
-      {/* Booking Modal */}
-      {pendingSlot && activeService && selectedDateObj && (
+      {/* Reschedule Confirmation Modal */}
+      {pendingSlot && activeService && reschedulingApp && (
+        <RescheduleModal
+          oldDate={reschedulingApp.date}
+          oldTime={reschedulingApp.time}
+          newDate={selectedDateStr}
+          newTime={pendingSlot}
+          serviceName={activeService.name}
+          submitting={submitting}
+          onConfirm={handleConfirmReschedule}
+          onCancel={() => setPendingSlot(null)}
+        />
+      )}
+
+      {/* Regular New Booking Modal */}
+      {pendingSlot && activeService && selectedDateObj && !reschedulingApp && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex justify-between items-center mb-4">
@@ -876,6 +992,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                   const srvName = app.serviceName || 'תספורת';
                   const srvDur = app.serviceDuration || 30;
                   const calUrl = buildGoogleCalendarUrl(app.date, app.time, app.firstName, app.lastName, srvName, srvDur);
+                  const isFuture = app.date > todayStr || (app.date === todayStr && timeToMins(app.time) > currentMinutes);
+
                   return (
                     <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5">
                       <div>
@@ -899,20 +1017,28 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                         firstName={app.firstName}
                       />
 
-                      <div className="flex items-center gap-2 pt-2 border-t border-zinc-900">
+                      <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zinc-900">
+                        {isFuture && (
+                          <button
+                            onClick={() => handleStartReschedule(app)}
+                            className="bg-sky-500/15 hover:bg-sky-500 text-sky-400 hover:text-zinc-950 border border-sky-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
+                          >
+                            הזז תור 🔄
+                          </button>
+                        )}
                         <a
                           href={calUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex-1 text-center bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-amber-500/30 text-xs font-bold py-2 rounded-lg transition"
+                          className="flex-1 text-center bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-amber-500/30 text-xs font-bold py-2 px-2 rounded-lg transition"
                         >
-                          הוסף ליומן 📅
+                          יומן 📅
                         </a>
                         <button
                           onClick={() => handleCancelAppointment(app)}
-                          className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-3 py-2 rounded-lg transition"
+                          className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
                         >
-                          ביטול תור
+                          ביטול
                         </button>
                       </div>
                     </div>
