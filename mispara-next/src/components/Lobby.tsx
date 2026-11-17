@@ -11,6 +11,9 @@ import InstallAppButton from './InstallAppButton';
 import NavigateButton from './NavigateButton';
 import GalleryModal from './GalleryModal';
 import RescheduleModal from './RescheduleModal';
+import ContactBarberBtn from './ContactBarberBtn';
+import QuickRebook from './QuickRebook';
+import ReviewWidget from './ReviewWidget';
 
 interface LobbyProps {
   userEmail: string;
@@ -47,6 +50,8 @@ interface Appointment {
   servicePrice?: number;
   serviceDuration?: number;
   status?: string;
+  rating?: number;
+  reviewComment?: string;
 }
 
 const DEFAULT_SERVICES: BarberService[] = [
@@ -317,7 +322,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
   });
 
   const maxActiveLimit = Number(settings.maxActivePerUser) || 0;
-  // Bypass quota check while actively rescheduling an existing appointment
   const reachedBookingQuota = !reschedulingApp && maxActiveLimit > 0 && myActiveFutureAppointments.length >= maxActiveLimit;
 
   const buildGoogleCalendarUrl = (
@@ -401,7 +405,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
 
     setSubmitting(true);
     try {
-      // 1. Create new appointment with same customer details
       await addDoc(collection(db, 'appointments'), {
         userEmail,
         date: selectedDateStr,
@@ -417,7 +420,6 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
         createdAt: Date.now(),
       });
 
-      // 2. Delete previous appointment
       await deleteDoc(doc(db, 'appointments', reschedulingApp.id));
 
       const calUrl = buildGoogleCalendarUrl(
@@ -573,6 +575,7 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
             </div>
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <ContactBarberBtn />
             <NavigateButton />
             <GalleryModal />
             <InstallAppButton />
@@ -648,6 +651,15 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
               צפה בתורים שלי
             </button>
           </div>
+        )}
+
+        {/* Quick Rebook Banner on Step 1 */}
+        {bookingStep === 'service' && (
+          <QuickRebook
+            myAppointments={myAppointments}
+            enabledServices={enabledServices}
+            onQuickSelectService={handleChooseService}
+          />
         )}
 
         {/* STEP 1: SERVICE SELECTION ONLY */}
@@ -983,9 +995,9 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                 );
               })}
 
-              {/* Active Appointments */}
+              {/* Active & Past Appointments */}
               {myAppointments.length === 0 && adminCanceledApps.length === 0 ? (
-                <p className="text-center text-zinc-500 text-sm py-8">אין לך תורים פעילים בחשבון זה</p>
+                <p className="text-center text-zinc-500 text-sm py-8">אין לך תורים בחשבון זה</p>
               ) : (
                 myAppointments.map((app) => {
                   const d = new Date(app.date + 'T00:00:00');
@@ -1011,36 +1023,44 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                         <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
                       </div>
 
-                      <ImLateButton
-                        date={app.date}
-                        time={app.time}
-                        firstName={app.firstName}
-                      />
+                      {isFuture ? (
+                        <>
+                          <ImLateButton
+                            date={app.date}
+                            time={app.time}
+                            firstName={app.firstName}
+                          />
 
-                      <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zinc-900">
-                        {isFuture && (
-                          <button
-                            onClick={() => handleStartReschedule(app)}
-                            className="bg-sky-500/15 hover:bg-sky-500 text-sky-400 hover:text-zinc-950 border border-sky-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
-                          >
-                            הזז תור 🔄
-                          </button>
-                        )}
-                        <a
-                          href={calUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex-1 text-center bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-amber-500/30 text-xs font-bold py-2 px-2 rounded-lg transition"
-                        >
-                          יומן 📅
-                        </a>
-                        <button
-                          onClick={() => handleCancelAppointment(app)}
-                          className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
-                        >
-                          ביטול
-                        </button>
-                      </div>
+                          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zinc-900">
+                            <button
+                              onClick={() => handleStartReschedule(app)}
+                              className="bg-sky-500/15 hover:bg-sky-500 text-sky-400 hover:text-zinc-950 border border-sky-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
+                            >
+                              הזז תור 🔄
+                            </button>
+                            <a
+                              href={calUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex-1 text-center bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-amber-500/30 text-xs font-bold py-2 px-2 rounded-lg transition"
+                            >
+                              יומן 📅
+                            </a>
+                            <button
+                              onClick={() => handleCancelAppointment(app)}
+                              className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
+                            >
+                              ביטול
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <ReviewWidget
+                          appointmentId={app.id}
+                          existingRating={app.rating}
+                          existingComment={app.reviewComment}
+                        />
+                      )}
                     </div>
                   );
                 })
