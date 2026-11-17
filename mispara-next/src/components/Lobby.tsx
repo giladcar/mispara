@@ -562,41 +562,72 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
       <BanGuard userEmail={userEmail} onBannedLogout={onLogout} />
       <AnnouncementBanner />
 
-      {/* Header */}
+     {/* Header */}
       <header className="bg-zinc-900/90 backdrop-blur-md border-b border-zinc-800 sticky top-0 z-30">
-        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg shrink-0">✂</div>
-            <div className="min-w-0">
-              <h1 className="text-base sm:text-lg font-black text-white leading-tight">המספרה</h1>
-              <p className="text-[11px] text-zinc-400 truncate max-w-[110px] sm:max-w-xs" dir="ltr">
-                {firstName ? `${firstName} ${lastName}` : userEmail}
-              </p>
+        <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          {/* Top Row: Brand + Mobile Primary Buttons */}
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-zinc-950 font-black text-lg shrink-0">✂</div>
+              <div className="min-w-0">
+                <h1 className="text-base sm:text-lg font-black text-white leading-tight">המספרה</h1>
+                <p className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-[180px]" dir="ltr">
+                  {firstName ? `${firstName} ${lastName}` : userEmail}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex sm:hidden items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="relative bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
+              >
+                <span>התורים שלי</span>
+                <span className="bg-zinc-950 text-amber-400 text-[11px] px-1.5 py-0.5 rounded-full">
+                  {myActiveFutureAppointments.length}{maxActiveLimit > 0 ? `/${maxActiveLimit}` : ''}
+                </span>
+                {adminCanceledApps.length > 0 && (
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-600 border border-zinc-950 animate-ping" />
+                )}
+              </button>
+              <button
+                onClick={handleConfirmLogout}
+                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-2.5 py-2 rounded-xl"
+              >
+                יציאה
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <ContactBarberBtn />
-            <NavigateButton />
-            <GalleryModal />
-            <InstallAppButton />
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="relative bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs sm:text-sm px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
-            >
-              <span>התורים שלי</span>
-              <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">
-                {myActiveFutureAppointments.length}{maxActiveLimit > 0 ? `/${maxActiveLimit}` : ''}
-              </span>
-              {adminCanceledApps.length > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-600 border border-zinc-950 animate-ping" />
-              )}
-            </button>
-            <button
-              onClick={handleConfirmLogout}
-              className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-2.5 py-2 rounded-xl"
-            >
-              יציאה
-            </button>
+
+          {/* Second Row on Mobile / Right Side on Desktop */}
+          <div className="flex items-center justify-between sm:justify-end gap-1.5 sm:gap-2 overflow-x-auto pb-0.5 sm:pb-0">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <ContactBarberBtn />
+              <NavigateButton />
+              <GalleryModal />
+              <InstallAppButton />
+            </div>
+
+            <div className="hidden sm:flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="relative bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-sm px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-lg shadow-amber-500/10"
+              >
+                <span>התורים שלי</span>
+                <span className="bg-zinc-950 text-amber-400 text-xs px-1.5 py-0.5 rounded-full">
+                  {myActiveFutureAppointments.length}{maxActiveLimit > 0 ? `/${maxActiveLimit}` : ''}
+                </span>
+                {adminCanceledApps.length > 0 && (
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-600 border border-zinc-950 animate-ping" />
+                )}
+              </button>
+              <button
+                onClick={handleConfirmLogout}
+                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold px-2.5 py-2 rounded-xl"
+              >
+                יציאה
+              </button>
+            </div>
           </div>
         </div>
       </header>
