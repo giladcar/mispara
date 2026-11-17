@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { doc, getDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import Lobby from '../components/Lobby';
+import SplashScreen from '../components/SplashScreen';
 
 export default function HomePage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -111,6 +112,7 @@ export default function HomePage() {
   }
 
   return (
+  <SplashScreen />
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4" dir="rtl">
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 sm:p-8 shadow-2xl">
         <div className="flex flex-col items-center text-center mb-6">
