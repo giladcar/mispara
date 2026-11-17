@@ -803,15 +803,19 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                   const freeCount = countFreeSlotsForDate(dateStr);
                   const canPick = freeCount > 0;
                   const isSelected = dateStr === selectedDateStr && canPick;
-
+                  const isTodayCell = dateStr === todayStr;
                   return (
                     <button
                       key={dateStr}
                       disabled={!canPick}
                       onClick={() => handleChooseDate(dateStr)}
-                      className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
+                     className={`aspect-square rounded-xl flex flex-col items-center justify-center transition border ${
                         isSelected
                           ? 'bg-amber-500 text-zinc-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
+                          : isTodayCell
+                          ? canPick
+                            ? 'bg-yellow-400/25 border-yellow-400 text-yellow-200 font-black shadow-md shadow-yellow-400/15'
+                            : 'bg-yellow-400/15 border-yellow-400/60 text-yellow-300 font-bold cursor-not-allowed'
                           : canPick
                           ? 'bg-zinc-950 border-zinc-800 hover:border-amber-500/60 text-white'
                           : 'bg-zinc-950/30 border-transparent text-zinc-600 cursor-not-allowed opacity-50'
