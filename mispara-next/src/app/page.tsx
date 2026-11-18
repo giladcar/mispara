@@ -5,7 +5,8 @@ import { doc, getDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import Lobby from '../components/Lobby';
 import SplashScreen from '../components/SplashScreen';
-
+import ThemeToggle from '../components/ThemeToggle';
+ 
 export default function HomePage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [emailInput, setEmailInput] = useState('');
@@ -114,6 +115,9 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4" dir="rtl">
 	  <SplashScreen />
+	  <div className="fixed top-4 left-4 z-30">
+        <ThemeToggle />
+      </div>
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 sm:p-8 shadow-2xl">
         <div className="flex flex-col items-center text-center mb-6">

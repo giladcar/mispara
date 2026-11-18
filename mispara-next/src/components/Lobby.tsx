@@ -12,6 +12,7 @@ import NavigateButton from './NavigateButton';
 import GalleryModal from './GalleryModal';
 import RescheduleModal from './RescheduleModal';
 import ContactBarberBtn from './ContactBarberBtn';
+import ThemeToggle from './ThemeToggle';
 import QuickRebook from './QuickRebook';
 import ReviewWidget from './ReviewWidget';
 import SplashScreen from './SplashScreen';
@@ -604,7 +605,8 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
           {/* Second Row on Mobile / Right Side on Desktop */}
           <div className="flex items-center justify-between sm:justify-end gap-1.5 sm:gap-2 overflow-x-auto pb-0.5 sm:pb-0">
             <div className="flex items-center gap-1.5 shrink-0">
-              <ContactBarberBtn />
+             <ThemeToggle />
+			 <ContactBarberBtn />
               <NavigateButton />
               <GalleryModal />
               <InstallAppButton />
