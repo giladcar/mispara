@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import React, { useState } from 'react';
+import { addDoc, collection } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 interface ImLateButtonProps {
@@ -11,48 +11,73 @@ interface ImLateButtonProps {
 }
 
 export default function ImLateButton({ date, time, firstName }: ImLateButtonProps) {
-  const [barberPhone, setBarberPhone] = useState('');
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [open, setOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sentMins, setSentMins] = useState<number | null>(null);
 
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'config', 'settings'), (snap) => {
-      if (snap.exists()) {
-        setBarberPhone((snap.data().barberPhone || '').trim());
-      }
-    });
+  const handleSendLate = async (mins: number) => {
+    setSending(true);
+    try {
+      await addDoc(collection(db, 'late_alerts'), {
+        date,
+        time,
+        firstName,
+        delayMinutes: mins,
+        createdAt: Date.now(),
+      });
+      setSentMins(mins);
+      setOpen(false);
+    } catch {
+      alert('שגיאה בשליחת הודעת איחור');
+    } finally {
+      setSending(false);
+    }
+  };
 
-    const timer = setInterval(() => setNowMs(Date.now()), 30000);
-    return () => {
-      unsub();
-      clearInterval(timer);
-    };
-  }, []);
-
-  if (!barberPhone) return null;
-
-  const [y, m, d] = date.split('-').map(Number);
-  const [hh, mm] = time.split(':').map(Number);
-  const appTimestamp = new Date(y, m - 1, d, hh, mm, 0).getTime();
-
-  const diffMinutes = (appTimestamp - nowMs) / 60000;
-
-  // Active from 60 minutes before the appointment until 15 minutes after start time
-  const isWindowActive = diffMinutes <= 60 && diffMinutes >= -15;
-  if (!isWindowActive) return null;
-
-  const cleanDigits = barberPhone.replace(/\D/g, '');
-  const intlPhone = cleanDigits.startsWith('0') ? '972' + cleanDigits.slice(1) : cleanDigits;
-  const text = `היי, אני ${firstName}, בדרך למספרה לתור של ${time} — אאחר ב-5–10 דקות 🙏`;
-  const waUrl = `https://wa.me/${intlPhone}?text=${encodeURIComponent(text)}`;
+  if (sentMins) {
+    return (
+      <div className="bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold px-3 py-2 rounded-xl text-center">
+        ⏰ נשלחה הודעה לספר על איחור של כ-{sentMins} דקות
+      </div>
+    );
+  }
 
   return (
-    <a
-      href={waUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block w-full text-center bg-amber-500/15 hover:bg-amber-500 text-amber-300 hover:text-zinc-950 border border-amber-500/40 text-xs font-bold py-2 rounded-lg transition"
-    >
-      אני מאחר (עדכן בוואטסאפ) 🏃‍♂️💬
-    </a>
+    <div className="space-y-1.5">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="w-full bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-bold py-2 px-3 rounded-xl transition flex items-center justify-center gap-1.5"
+        >
+          <span>⏰</span>
+          <span>אני מאחר לתור — עדכן את הספר</span>
+        </button>
+      ) : (
+        <div className="bg-zinc-900 border border-amber-500/40 rounded-xl p-2.5 space-y-2">
+          <div className="text-[11px] font-bold text-zinc-300 text-center">בכמה דקות תאחר?</div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {[5, 10, 15].map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={sending}
+                onClick={() => handleSendLate(m)}
+                className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-xs py-1.5 rounded-lg transition"
+              >
+                {m} דק&apos;
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="w-full text-[11px] text-zinc-400 hover:text-white pt-0.5"
+          >
+            ביטול
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

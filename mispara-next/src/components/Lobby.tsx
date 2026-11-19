@@ -1043,8 +1043,67 @@ export default function Lobby({ userEmail, onLogout }: LobbyProps) {
                   const srvName = app.serviceName || 'תספורת';
                   const srvDur = app.serviceDuration || 30;
                   const calUrl = buildGoogleCalendarUrl(app.date, app.time, app.firstName, app.lastName, srvName, srvDur);
-                  const isFuture = app.date > todayStr || (app.date === todayStr && timeToMins(app.time) > currentMinutes);
+const [appH, appM] = (app.time || '00:00').split(':').map(Number);
+                  const appStartMins = appH * 60 + appM;
+                  const isFuture = app.date > todayStr || (app.date === todayStr && appStartMins > currentMinutes);
 
+                  return (
+                    <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5">
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-bold text-amber-400">
+                            יום {daysHe[d.getDay()]}, {d.getDate()}/{d.getMonth() + 1} | {app.time}
+                          </p>
+                          {app.servicePrice && (
+                            <span className="text-xs font-bold text-emerald-400">₪{app.servicePrice}</span>
+                          )}
+                        </div>
+                        <p className="text-xs font-medium text-zinc-200 mt-1">
+                          {srvName} ({srvDur} דק&apos;) — {app.firstName} {app.lastName}
+                        </p>
+                        <p className="text-[11px] text-zinc-500" dir="ltr">{app.phone}</p>
+                      </div>
+
+                      {isFuture ? (
+                        <>
+                          <ImLateButton
+                            date={app.date}
+                            time={app.time}
+                            firstName={app.firstName}
+                          />
+
+                          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zinc-900">
+                            <button
+                              onClick={() => handleStartReschedule(app)}
+                              className="bg-sky-500/15 hover:bg-sky-500 text-sky-400 hover:text-zinc-950 border border-sky-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
+                            >
+                              הזז תור 🔄
+                            </button>
+                            <a
+                              href={calUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex-1 text-center bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-amber-500/30 text-xs font-bold py-2 px-2 rounded-lg transition"
+                            >
+                              יומן 📅
+                            </a>
+                            <button
+                              onClick={() => handleCancelAppointment(app)}
+                              className="bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/30 text-xs font-bold px-2.5 py-2 rounded-lg transition"
+                            >
+                              ביטול
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <ReviewWidget
+                          appointmentId={app.id}
+                          existingRating={app.rating}
+                          existingComment={app.reviewComment}
+                        />
+                      )}
+                    </div>
+                  );
                   return (
                     <div key={app.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5">
                       <div>
